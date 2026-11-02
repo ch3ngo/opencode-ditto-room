@@ -181,6 +181,7 @@ The current release has exactly one scene and one 14 x 11 Ditto shape. Backgroun
 - The room is designed for the default 42-cell sidebar. Terminals narrower than roughly 122 columns can clip the sidebar or the room.
 - One scene, one sprite size, at most 8 Dittos drawn. Everything beyond the cap is queued, not dropped.
 - Spawn and despawn depend on real active direct child sessions. Real lifecycle testing needs a model call and is not covered by the offline test suite.
+- In headless testing, a session with no live assistant activity still showed OpenCode's large empty-state sidebar graphic over the sidebar plugin area, hiding the room. The plugin loaded and composed its frames during that time. If the room is not visible right after install, open or continue a session with conversation content and restart the TUI. Normal active sessions are the intended case.
 - The rendering was verified from tmux captures. Native terminal colours, light terminal themes and very long sessions with many agents have not been exhaustively tested.
 - The log at `/tmp/opencode-ditto-room.log` is appended to and is not rotated. It records load and unload, slot placement, art version, room height changes, population counts and error messages. It never records session ids, prompts or task text.
 
