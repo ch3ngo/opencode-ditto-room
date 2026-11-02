@@ -1,34 +1,16 @@
-// Ditto room art data (v10, flat readable room, compact wall, large Ditto, blue
-// companion variant). Plain data only: no imports, no functions.
+// Ditto room art, plain data only: no imports, no functions. The engine composes
+// the layers at whatever height the terminal allows: a flat wall, a two pixel
+// baseboard, a flat floor and a small set of floor-anchored objects.
 //
-// ART MODEL (v10). The room is a layered scene that the engine composes at the
-// height the terminal allows:
-//   - a flat wall, a two pixel baseboard and a flat floor (one colour each)
-//   - a small set of floor-anchored objects with flat fills, clear silhouettes
-//     and a one pixel dark outline on the furniture, so they read against the
-//     wall
-//   - no gradients, no vignette, no dithering, no contact shading. The only
-//     shading in the room is the Ditto foot shadow the engine paints.
-// The floor keeps a fixed pixel depth for the current terminal tier and the
-// wall takes the remaining height, so every object stays anchored to the floor
-// and simply gets more wall above it in a taller room. The floor line is
-// therefore not simply half the room height.
-//
-// COORDINATES. ROOM_W is in pixels (1 pixel = 1 terminal cell wide, half a cell
-// tall). An object's `bottom` is the offset of its LAST row from its anchor: the
-// floor top by default (negative = above the floor line, positive = below it,
-// into the floor), or the deepest usable floor row when `from: "bottom"`. Its
-// first row is the anchor plus/minus the offset minus (rows.length - 1).
-// ANIM `dy` is relative to the floor top (negative = above it). Points of
-// interest use `at: "back"` (floor top row plus `offset`) or `at: "front"`
-// (last usable floor row minus `offset`).
-//
-// DITTO VARIANTS. `DITTO_SETS` holds one shape, 14 x 11. `DITTO_COLORS` supplies
-// per-kind colour overrides: agents use the normal palette, companions use the
-// shiny blue body. Shape, frames, animations and shadow are identical.
+// ROOM_W is in pixels (1 pixel = 1 terminal cell wide, half a cell tall). An
+// object's `bottom` is the offset of its LAST row from its anchor, the floor top
+// by default (negative = above the floor line, positive = into the floor), or the
+// deepest usable floor row when `from: "bottom"`. ANIM `dy` and POIS offsets are
+// relative to the floor top: `at: "back"` counts down from it, `at: "front"`
+// counts up from the deepest usable floor row.
 export const ART_VERSION = 10
 export const PALETTE: Record<string, string> = {
-  // Ditto sprite, emotes and speech bubble (unchanged since v1)
+  // Ditto sprite, emotes and speech bubble
   K: "#593a82",
   L: "#8a67b8",
   B: "#c997e7",
@@ -75,9 +57,8 @@ export const PALETTE: Record<string, string> = {
   C: "#3f7d84",
   V: "#dfe9e2",
 }
-// Per-kind Ditto colours. The agent map is empty (use PALETTE); the companion
-// map re-colours the same 14 x 11 frames to a shiny blue body. Eyes (E) and
-// tongue (P) are shared on purpose.
+// Per-kind colour overrides: the agent map is empty (PALETTE), the companion map
+// re-colours the same frames to a shiny blue body. Eyes (E) and tongue (P) stay shared.
 export const DITTO_COLORS: Record<"agent" | "companion", Record<string, string>> = {
   agent: {},
   companion: {
@@ -92,10 +73,8 @@ export const DITTO_COLORS: Record<"agent" | "companion", Record<string, string>>
   },
 }
 export const ROOM_W = 38
-// Visible compact pixel height: the engine picks an even value in
-// [ROOM_H_MIN, ROOM_H_MAX] from the terminal rows. 30 px = 15 text rows,
-// 40 px = 20 text rows. The floor depth of the current terminal tier is
-// derived separately in tui.tsx.
+// Visible compact height in pixels: the engine picks an even value in
+// [ROOM_H_MIN, ROOM_H_MAX] from the terminal rows (30 px = 15 rows, 40 px = 20).
 export const ROOM_H_MIN = 30
 export const ROOM_H_MAX = 40
 export const WALL_COLOR = "a"
@@ -110,9 +89,7 @@ export const FLOOR_SEAM_COLOR = "g"
 export const FLOOR_SEAMS: number[] = [9, 19, 29]
 export const FLOOR_SEAM_FROM = 2
 // Floor-anchored objects, painted back to front. `bottom` is the last row
-// relative to the floor top (see header). Wall-standing furniture uses -1,
-// wall-hung items less. `from: "bottom"` measures from the deepest usable floor
-// row instead, which is how the rug stays near the front as the room grows.
+// relative to the floor top; `from: "bottom"` measures from the deepest floor row.
 export type RoomObject = { name: string; x: number; bottom: number; from?: "top" | "bottom"; rows: string[] }
 export const OBJECTS: RoomObject[] = [
   {
@@ -176,9 +153,8 @@ export const OBJECTS: RoomObject[] = [
     ],
   },
   {
-    // Window hung on the wall, flat sky panes and a flat sun. The bottom is 3 px
-    // above the floor line (v9 used 6) so the 11 px sprite fits the 14 px compact
-    // wall without clipping.
+    // Window hung on the wall, flat sky panes and a flat sun. The bottom sits 3 px
+    // above the floor line so the 11 px sprite fits the 14 px compact wall.
     name: "window",
     x: 3,
     bottom: -3,
@@ -197,8 +173,8 @@ export const OBJECTS: RoomObject[] = [
     ],
   },
   {
-    // Floor lamp against the wall. Its last row is one pixel into the floor line
-    // so the 15 px sprite fits the 14 px compact wall; it sits clear of the rug.
+    // Floor lamp against the wall. Its last row reaches one pixel into the floor
+    // line so the 15 px sprite fits the 14 px compact wall; it sits clear of the rug.
     name: "lamp",
     x: 33,
     bottom: 0,
@@ -221,8 +197,8 @@ export const OBJECTS: RoomObject[] = [
     ],
   },
 ]
-// One Ditto size (14x11). The engine draws a shadow on row feetY + 1, so the
-// deepest usable feet row is ROOM_H - 2.
+// One Ditto size (14 x 11). The engine draws the shadow one row below the feet,
+// so the deepest usable feet row is ROOM_H - 2.
 export type DittoFrameName = "idle" | "squash" | "blink" | "happy" | "sad" | "laugh" | "wobbleL" | "wobbleR" | "stretch"
 export const DITTO_SETS: { w: number; h: number; frames: Record<DittoFrameName, string[]> }[] = [
   {
@@ -511,17 +487,15 @@ export const GLYPHS: Record<string, string[]> = {
 }
 // Dark on the cream wall and still readable on a lavender Ditto
 export const BADGE_COLOR = "#3d2b35"
-// Points of interest for a lone Ditto. `cx` is the horizontal centre pixel and
-// `at`/`offset` place the feet row relative to the floor (see header). Each one
-// must be a legal standing spot at every supported height.
+// Points of interest for a lone Ditto: `cx` is the centre pixel, `at`/`offset`
+// place the feet row, and each must be a legal standing spot at every height.
 export const POIS: { name: string; cx: number; at: "back" | "front"; offset: number; emote: typeof EMOTE_NAMES[number] }[] = [
   { name: "window", cx: 9, at: "back", offset: 0, emote: "sparkle" },
   { name: "lamp", cx: 29, at: "back", offset: 0, emote: "note" },
   { name: "rug", cx: 19, at: "front", offset: 1, emote: "zzz" },
 ]
 // Ambient animated pixels: one palette key per step, one step every `every`
-// ambient ticks (600 ms). `dy` is relative to the floor top. First frame equals
-// the pixel already drawn by the object underneath, so step 0 is the plain room.
+// ambient ticks (600 ms); `dy` is relative to the floor top and frame 0 is the plain room.
 export const ANIM: { x: number; dy: number; frames: string[]; every: number }[] = [
   { x: 10, dy: -9, frames: ["s", "q", "s", "u"], every: 4 },
   { x: 7, dy: -11, frames: ["s", "q", "s"], every: 5 },

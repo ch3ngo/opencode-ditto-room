@@ -1,240 +1,32 @@
-// OpenCode v2 TUI plugin: "Ditto room" in the session sidebar footer
-// (02/11/2026, engine v11 for art v10, six scenes). One Ditto (the Pokemon, a lavender blob)
-// per direct child session of the current session that is running right now,
-// plus shiny blue companion Dittos when fewer than two agents are active,
-// walking around a full-bleed pixel-art room, chatting with each other, showing
-// emote bubbles, popping in when a child starts and popping out when it ends.
-// The shared art (Ditto sprite sets, emotes, bubble, badge digits and the Living
-// Room scene) lives in `art.ts`; `scenes.ts` holds the six scene variants. This
-// file chooses one scene at startup and animates and composites it.
+// OpenCode v2 TUI plugin: "Ditto room" in the session sidebar footer. One Ditto
+// (the Pokemon, a lavender blob) per direct child session that is running right
+// now, plus shiny blue companions when fewer than two agents are active. They
+// walk around a full-bleed pixel-art room, chat, show emotes and pop in and out
+// with the child sessions.
 //
-// SPRITE SETS (v6): `DITTO_SETS` is a list of sprite sets ordered from the back
-// of the floor (smallest) to the front (largest), and the engine is generic in
-// its length `n`. A Ditto's set index is
-//   band(feetY) = min(n-1, floor((feetY - floorMin) * n /
-//                                (floorMax - floorMin + 1)))
-// Art v10 ships ONE set (14 x 11), so every Ditto is always that size, the band is
-// always 0 and band crossings can never happen. `DITTO_COLORS` adds per-kind
-// colour overrides, not extra shapes: agents use the normal palette, companions
-// the shiny blue one. The machinery is generic, so an art file can ship several
-// sets: with three sets a Ditto walking away shrinks and one coming forward
-// grows once per band crossing. Positions are stored as the horizontal CENTRE
-// `cx` plus the feet row; the box is
-//   [cx - floor(w/2), cx - floor(w/2) + w) x [feetY - h + 1, feetY]
-// where w and h come from that Ditto's set. Nothing else knows a sprite size: box
-// tests, chat spacing, hops, bubble placement, spawn and edge clamps all read the
-// set of the Ditto or of the position being tested. No band count is hard-coded:
-// grep for `NSETS` (it is `DITTO_SETS.length`).
+// Files: `art.ts` holds the shared art (palette, sprite sets, emotes, bubble,
+// badge and the Living Room scene), `scenes.ts` the six scene variants and
+// `chooseScene`, `tui.tsx` the engine (scene choice, depth model, behaviour,
+// compositor).
 //
-// SHADOW: every drawn Ditto casts a soft shadow on the GROUND row below its feet,
-// `feetY + 1`. The shadow darkens the buffer pixels of the foot span minus
-// one pixel at each end (`cx - floor(w/2) + 1` to `cx - floor(w/2) + w - 2`) by 30
-// percent (each #rrggbb channel times 0.70, rounded). While the Ditto is hopping
-// the shadow shrinks to the inner 4 pixels of that span, still on the ground row,
-// so it reads as height. Shadows are painted for every drawn Ditto before any
-// sprite, they follow the sprite's blink-out visibility, and they are not part of
-// any collision box.
+// A Ditto's sprite set is band(feetY) = min(n - 1, floor((feetY - floorMin) * n /
+// (floorMax - floorMin + 1))) with n = DITTO_SETS.length, so the art can ship
+// several sizes without the rest of the engine knowing any sprite size.
 //
-// AMBIENT (v11): the selected scene's `anim` list holds single object pixels that
-// cycle through that scene's palette keys, one step every `every` ambient ticks,
-// on a 600 ms clock of their own (OC_DITTO_AMBIENT=0 turns all scenes off). Their
-// y is relative to the floor top, so they stay on their object at every room
-// height; ones that fall outside the current view are skipped. Every scene ships
-// at least one changing entry. They are painted on the background before
-// shadows, sprites and bubbles. The ambient clock runs whenever the room is
-// visible, including with no Dittos; it only recomposes when the 200 ms Ditto
-// ticker is stopped and at least one animated pixel actually changed.
+// Slot: `prepend: "sidebar.footer"`, falling back to `before` if registration
+// throws. Never `replace`: that would remove the built-in cwd/branch line.
 //
-// RESPONSIVE HEIGHT (v10): the room is composed at a compact height derived from
-// process.stdout.rows. The floor is decoupled from the total: it keeps the
-// pixel depth of the same v9 terminal tier, and only the wall is trimmed.
-// compactRows = legacyRows - 2 at legacy tiers 18..22 and legacyRows - 1 at 16
-// and 17, so the wall loses 2 text rows wherever the existing furniture fits and
-// 1 row at the two smallest tiers, where a 14 px wall is the minimum that holds
-// the 14 px bookcase and 15 px lamp. The visible heights are 15, 16, 16, 17, 18,
-// 19 and 20 text rows (30 to 40 pixels) for terminal rows 28..44; the room is
-// hidden below 28. The floor's usable feet span is floorRows - 1, exactly as in
-// v9 (15, 16, 17, 18, 19, 20 and 21 rows); only the wall changes. The floor line
-// is not height / 2 any more. The art is floor-anchored, the Ditto is still
-// 14 x 11 and is never resampled. On resize, Dittos that no longer fit are
-// requeued and recomposed; queued Dittos use the new geometry.
-//
-// SOLO BEHAVIOUR (v10): a lone Ditto is never still for long. After every action it
-// stands 3 to 12 ticks, breathing (`idle` / `squash` every 6 ticks), then a
-// weighted picker chooses: wander 35, visit 20, dance 10, jump 10, lookaround 15,
-// emote 5, nap 5 (nap only after 3 actions and never with 3 or more Dittos drawn).
-// visit walks to a random free point in the selected scene's `pois`, stands 12 to 18 ticks and shows that
-// point's emote (a `zzz` point naps there for 14 ticks); dance is 14 ticks of
-// `wobbleL` / `wobbleR` with a note bubble and 2 ticks of `happy`; jump is two
-// hops with a 2 tick pause; lookaround is blink, idle, blink, then a 4 tick stand
-// with a 2 pixel shuffle; nap is 30 ticks of `squash` with a `zzz` bubble 8 on and
-// 4 off, then 2 ticks of `stretch`. Dance, jump, lookaround and nap are never
-// interrupted by a chat, and a chat can only start from a plain wander or stand,
-// or from a visit once it has arrived.
-//
-// DEPTH (v10): paint order is by ground feet y ascending, so a nearer Ditto
-// (lower feet) is drawn after and occludes a farther one. Two Dittos whose feet
-// rows are within SAME_DEPTH_PX (4 pixels, two text rows) are on the same plane
-// and obey the full no-overlap rule: their boxes, inflated by 1 on every side,
-// may not even touch, and every move is validated with the NEW feet row, so a
-// Ditto cannot step from behind into a same-plane overlap. Pairs further apart in
-// depth may overlap and pass behind each other; that is the intended occlusion.
-// The defensive sweep only repairs same-plane pairs and logs `overlap fixed`.
-//
-// POPULATION (v10): agents are keyed by real session id, one per active direct
-// child. Companions are synthetic (`companion<N>`), have no session behind them,
-// and exist only to keep at least two Dittos on screen: 0 active agents -> 2 blue
-// companions, 1 -> 1 pink agent plus 1 blue companion, 2 or more -> agents only.
-// With OC_DITTO_COMPANIONS=0 no companions are created; only real active agents
-// appear, and 0 agents leaves the room empty, with visibility still following
-// OC_DITTO_ALWAYS and the terminal height gate. A new companion is queued and
-// placed through the normal packing, preferring a spot within chat reach of an
-// existing Ditto; a surplus companion pops out, newest first, after any chat it
-// is in is ended. Reconciliation runs on every active-set change and every tick,
-// so a companion removed during a pop-out is replenished, and a popping-out
-// agent is never counted as a companion. Companions use every solo and social
-// behaviour, count toward MAX_DITTOS and the queue, and are logged separately
-// from the active agent count.
-//
-// Loaded from cli.json ("plugins"), NOT from plugins/ (a TUI-only part is not a
-// server plugin). Docs: https://opencode.ai/v2/docs/build/plugins/cli/ ("Slots").
-// Written against OpenCode 2.2.4; the data/slot API may change between releases
-// (see README.md, Compatibility). Relative sibling import: verified working in
-// OpenCode 2.2.4 on 01/11/2026.
-//
-// ART CONTRACT. Shared art lives in `art.ts` (plain `export const`, no imports):
-//   ART_VERSION                  number, logged once at load
-//   PALETTE                      Record<char, "#rrggbb"> for the shared sprites
-//                                and the Living Room scene. "." is transparent
-//   ROOM_W                       room width in PIXELS. One pixel is one terminal
-//                                cell wide and half a cell tall
-//   ROOM_H_MIN, ROOM_H_MAX       visible compact height in PIXELS (30 and 40)
-//   DITTO_SETS                   one or more ordered sets, each { w, h, frames }
-//                                with the nine frame names idle, squash, blink,
-//                                happy, sad, laugh, wobbleL, wobbleR, stretch
-//   DITTO_COLORS                 per-kind colour overrides { agent, companion }
-//   EMOTE_W, EMOTE_H, EMOTE_NAMES, EMOTES
-//                                emote sprite size and names
-//   BUBBLE_W, BUBBLE_H, BUBBLE_TAIL_X, BUBBLE_INNER_X, BUBBLE_INNER_Y, BUBBLE
-//                                speech bubble and emote placement
-//   DIGIT_W, DIGIT_H, GLYPHS, BADGE_COLOR
-//                                overflow badge glyphs and colour
-//   WALL_COLOR, BASEBOARD, FLOOR_COLOR, FLOOR_SEAM_COLOR, FLOOR_SEAMS,
-//   FLOOR_SEAM_FROM, OBJECTS, POIS, ANIM
-//                                the Living Room scene, reused by scenes.ts
-//
-// SCENE CONTRACT. `scenes.ts` exports six `Scene` objects and `chooseScene`:
-//   id, name                     stable startup ID and display name
-//   palette, wall, floor, floorSeam
-//                                per-scene colours and palette keys
-//   baseboard                    rows at the bottom of the wall, top row first;
-//                                empty for outdoor scenes
-//   floorSeams, floorSeamFrom    vertical floor seams
-//   objects                      floor-anchored objects { name, x, bottom,
-//                                from?, rows }; rows are bottom aligned, "."
-//                                transparent, and `from: "bottom"` anchors to
-//                                the deepest usable floor row
-//   pois                         visit points { name, cx, at, offset, emote };
-//                                `at` is "back" or "front"
-//   anim                         ambient pixels { x, dy, frames, every }; dy is
-//                                relative to the floor top and the first frame
-//                                equals the pixel already there
-// `chooseScene(raw, random)` pins a valid ID, picks a random scene for unset or
-// "random", and falls back to Living Room for an invalid value.
-//
-// Transparent pixels are ".", skipped when painting.
-//
-// Slot: `prepend: "sidebar.footer"` (falls back to `before: "sidebar.footer"`
-// if the registration throws). The footer is a flexShrink 0 box OUTSIDE the
-// sidebar scrollbox, pinned below it, so in a short terminal the scrollable
-// sections (Context / MCP / Subagents) get clipped and the room does not. Never
-// `replace` here, it would remove the built-in cwd/branch line.
-//
-// Rendering: every tick (and once at start) the flat background is composed into
-// a buffer of hex colours (wall, baseboard, floor, seams, objects, ambient
-// pixels), the Dittos are painted on it sorted by GROUND feet y ascending, ties
-// by creation seq (back to front, so a nearer Ditto covers a farther one and a
-// hop does not change the order), companion bodies use DITTO_COLORS.companion,
-// then the bubbles, then the `+N` overflow badge in the top-right corner, on top
-// of everything. Two
-// pixel rows become one text row: `█` in one colour when both pixels are equal,
-// else `▀` with the top pixel as fg and the bottom pixel as bg. Neighbouring
-// cells with the same (char, fg, bg) are merged into one <span>.
-//
-// Capacity and queue: at most MAX_DITTOS (8) Dittos are drawn at once. Depth-aware
-// overlap raises the practical floor capacity above the old four: the placement
-// grid packs 8 at compact 17 to 20 room rows and 6 at compact 15 to 16 rows,
-// after which the cap (not the floor) is the limit. Every other Ditto sits QUEUED in the map, not
-// drawn and not counted as drawn; it is retried every tick and spawns with the
-// pop-in animation the moment a free spot exists. Spawn and wander targets come
-// from a coarse candidate grid that is scanned in full (no 20 random tries); a
-// spawn prefers a spot that does not touch any full sprite (companions first
-// prefer a spot within chat reach) and uses legal cross-depth overlap only when
-// nothing cleaner is free. While anything is queued the room shows `+N` (queued
-// count, capped at 99) in BADGE_COLOR, top-right.
-//
-// Active detection follows the same rules as a subagent sidebar (plugins cannot
-// share code), trimmed to "which children are active right now": status() ===
-// "running", or not ended and (a pending user input is "starting", the last
-// assistant message is in flight, or the parent's `subagent` tool part for it is
-// still running).
-//
-// Env vars (set before starting the TUI):
-//   OC_DITTO_SCENE      stable scene ID. Unset or "random" picks one scene once
-//                       when the module loads; a valid ID pins it; an invalid
-//                       value falls back to living-room. Read at startup only
-//   OC_DITTO_DEMO       integer 1..12: ignore session data, animate N fake
-//                       AGENT Dittos through the same spawn/queue logic, and add
-//                       the companions the minimum rule requires when companions
-//                       are enabled; off by default
-//   OC_DITTO_COMPANIONS=0 disable the blue filler companions. Enabled by default;
-//                       only real active agent Dittos remain. With 0 agents,
-//                       count() is 0, so the empty room follows OC_DITTO_ALWAYS
-//                       and the height gate as described below
-//   OC_DITTO_ALWAYS=0   hide an empty room. With companions enabled (default)
-//                       there are always at least two, so count() is never 0 and
-//                       the flag has no practical effect; with
-//                       OC_DITTO_COMPANIONS=0 and 0 agents it hides the empty
-//                       room
-//   OC_DITTO_MIN_HEIGHT integer, hide the room when stdout rows < it (default
-//                       28, the minimum that fits a 16 row room plus 12 rows of
-//                       sidebar). Ignored if not an integer in 0..1000
-//   OC_DITTO_AMBIENT=0  stop the selected scene's ambient pixels. Any other
-//                       value or unset keeps them on
-// (No fixed room height env var: the height is derived from the terminal, see
-// RESPONSIVE HEIGHT above.)
+// Env vars (read at startup): OC_DITTO_SCENE scene ID or "random",
+// OC_DITTO_DEMO 1..12 fake agents, OC_DITTO_COMPANIONS=0 no blue fillers,
+// OC_DITTO_ALWAYS=0 hide an empty room, OC_DITTO_MIN_HEIGHT rows gate (28),
+// OC_DITTO_AMBIENT=0 stop the ambient pixels.
 //
 // Privacy: no session id, task text or prompt is ever logged or written. The log
-// (/tmp/opencode-ditto-room.log) holds only load/unload, the slot placement, the
-// art version, the selected scene ID and source, `agents: <n>, companions: <m>`
-// when that composition changes, `overlap fixed` (max 20 per run, no content)
-// and error messages (max 20 per run). No Ditto position is logged and companion
-// ids never enter the log.
-// No network, no state files. Every read is wrapped so a failure renders nothing
-// instead of breaking the sidebar.
+// is /tmp/opencode-ditto-room.log (load and unload, slot, art version, scene,
+// population counts, errors). No network, no state files.
 //
-// Deployment: tui.tsx, art.ts and scenes.ts are one set and belong in the same
-// directory. Copy all three into <config>/tui-plugins/ditto-room/ and list
-// "./tui-plugins/ditto-room" in the `plugins` array of cli.json, then restart
-// the TUI. A missing scenes.ts prevents the plugin from loading. See README.md
-// for install, update and uninstall steps.
-//
-// Verified 02/11/2026 with art v10 (OpenCode 2.2.4, tmux, no prompt sent, no
-// model call): compact heights 15 to 20 rows with the v9 floor span preserved
-// per tier (0 same-depth overlaps, capacity 6 at 15 to 16 rows and 8 at 17 to
-// 20), background and wall props exact at every height from 28 to 44 terminal
-// rows (0 unexplained pixels, no prop clipping), population 0 -> 2 blue,
-// 1 -> 1 pink + 1 blue, 2 -> pink only, demo 8 drawing 6 +2 at 34 rows and 8 at
-// 40, and a 40 -> 34 -> 44 -> 36 -> 35 -> 28 -> 40 resize run with 0
-// `overlap fixed`. v1.1.0 also loads all six scene IDs, selects one once at
-// startup, keeps it stable across resize, falls back to living-room for an
-// invalid value, and changes ambient pixels for every scene at 44, 38 and 34
-// rows. With OC_DITTO_AMBIENT=0 every tall scene stayed byte-identical between
-// samples. See README.md (Verification).
-// NOT verified: real spawn/despawn on a live subagent (needs a model call), how
-// the half-cell background colours and the blue companion look in a native
-// terminal outside tmux, the light theme, and the 4 pixel depth threshold over
-// a long real session with many agents.
+// tui.tsx, art.ts and scenes.ts are one set and must be deployed together. See
+// README.md for install, update and uninstall steps.
 import { Plugin } from "@opencode/plugin/tui"
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 import { appendFileSync } from "node:fs"
@@ -260,10 +52,8 @@ import {
 } from "./art"
 import { chooseScene } from "./scenes"
 
-// Scene choice is made once when the plugin module loads. OC_DITTO_SCENE pins a
-// stable ID, unset or "random" picks one, and an invalid value falls back to
-// Living Room. The TUI keeps this object for its whole lifetime, so resizes,
-// tabs and child sessions do not change it.
+// Scene choice happens once at module load: a valid ID pins it, unset or
+// "random" picks one, an invalid value falls back to Living Room.
 const CHOSEN = chooseScene(process.env.OC_DITTO_SCENE)
 const currentArt = CHOSEN.scene
 const POIS = currentArt.pois
@@ -290,24 +80,17 @@ const parseIntIn = (v: string | undefined, dflt: number, lo: number, hi: number)
 
 // derived from art.ts, never typed in here
 const ROOM_COLS = ROOM_W
-// v9 geometry, used as the tier reference for the preserved floor: the legacy
-// room had H = 2 * rows and the floor line at H / 2.
+// the legacy room had H = 2 * rows with the floor line at H / 2
 const COMPACT_ROWS_MIN = Math.ceil(ROOM_H_MIN / 2) // 15
 const COMPACT_ROWS_MAX = Math.floor(ROOM_H_MAX / 2) // 20
-// v9 tier reference, used only to preserve the floor depth of the same terminal
-// size. v10 compact heights remove 2 terminal rows of wall at every tier where
-// the existing furniture fits, and 1 row at the two smallest tiers because a
-// 14 px wall is the minimum that holds the 14 px bookcase and 15 px lamp. The
-// floor span itself never changes.
+// legacy tier, used only to preserve the floor depth of the same terminal size:
+// compact heights drop 2 wall rows, or 1 where a 14 px wall is the minimum
 const LEGACY_ROWS_MIN = COMPACT_ROWS_MIN + 1 // 16
 const LEGACY_ROWS_MAX = COMPACT_ROWS_MAX + 2 // 22
 const NSETS = DITTO_SETS.length
 
-// RESPONSIVE HEIGHT. The sidebar is 42 cells wide with 2 cells of padding, so
-// the 38 cell room always fits horizontally; only the height adapts. 18
-// terminal rows stay reserved above the room for the scrollable sidebar
-// (Context, MCP, Todo, Subagents) and the built-in cwd line. The room is hidden
-// entirely below 28 rows, the old gate.
+// The sidebar is 42 cells wide, so the 38 cell room always fits horizontally and
+// only the height adapts; 18 terminal rows stay reserved above the room.
 const SIDEBAR_RESERVE_ROWS = 18
 const ROOM_HIDE_BELOW = LEGACY_ROWS_MIN + 12 // 28
 const legacyRowsFor = (rows: number) =>
@@ -319,11 +102,8 @@ const compactRowsFor = (rows: number) => {
   return legacy >= 18 ? legacy - 2 : legacy - 1
 }
 
-// The visible scene: wall plus floor. The floor is decoupled from the total
-// height: `floorRows` is the preserved floor region in pixels (equal to the
-// legacy room row count of the same terminal tier), and the wall is whatever is
-// left above it. The floor's usable feet span is floorRows - 1 rows, exactly as
-// in v9; only the wall shrinks.
+// The floor is decoupled from the total height: `floorRows` is the preserved
+// floor in pixels (the legacy row count) and the wall takes the rest.
 type Scene = { h: number; floorTop: number; floorMin: number; floorMax: number; floorRows: number }
 const sceneFor = (compactRows: number, floorRows: number): Scene => {
   const rows = Math.max(COMPACT_ROWS_MIN, Math.min(COMPACT_ROWS_MAX, compactRows))
@@ -332,16 +112,14 @@ const sceneFor = (compactRows: number, floorRows: number): Scene => {
   const floorTop = h - fRows
   return { h, floorTop, floorMin: floorTop, floorMax: h - 2, floorRows: fRows }
 }
-// One room is visible at a time (one sidebar); the Room component updates this
-// from the terminal rows before every compose. Start at the compact minimum with
-// the floor of the corresponding legacy 16 row tier.
+// one room is visible at a time; the Room component updates this from the
+// terminal rows before every compose
 let scene: Scene = sceneFor(COMPACT_ROWS_MIN, LEGACY_ROWS_MIN)
 
 const DEMO = parseIntIn(process.env.OC_DITTO_DEMO, 0, 1, 12)
 // On by default: only an explicit OC_DITTO_ALWAYS=0 hides the empty room.
 const ALWAYS = (process.env.OC_DITTO_ALWAYS ?? "").trim() !== "0"
-// Blue filler companions are on by default; only an explicit
-// OC_DITTO_COMPANIONS=0 disables them.
+// blue filler companions; only OC_DITTO_COMPANIONS=0 disables them
 const COMPANIONS_ON = (process.env.OC_DITTO_COMPANIONS ?? "").trim() !== "0"
 // hide the room below this many terminal rows
 const MIN_HEIGHT = parseIntIn(process.env.OC_DITTO_MIN_HEIGHT, ROOM_HIDE_BELOW, 0, 1000)
@@ -350,9 +128,8 @@ const TICK_MS = 200
 const AMBIENT_MS = 600
 // ambient pixels are on unless OC_DITTO_AMBIENT=0
 const AMBIENT_ON = (process.env.OC_DITTO_AMBIENT ?? "").trim() !== "0"
-// Depth model: feet rows within this many pixels (two text rows) are the same
-// plane, so their full sprite boxes must not touch. Pairs further apart in depth
-// may overlap and the nearer (lower) one occludes the farther one.
+// feet rows within this many pixels are the same plane, so their full boxes must
+// not touch; pairs further apart may overlap, the nearer one painted last
 const SAME_DEPTH_PX = 4
 const CHAT_PAD = 6
 const CHAT_DY = 8
@@ -449,11 +226,8 @@ const hopFrame = (h: number): FrameName => (h >= 3 ? "stretch" : h === 2 ? "idle
 
 // ------------------------------------------------------- ambient pixels
 
-// The selected scene's ambient entries cycle through its palette keys, one step
-// every `every` ambient ticks; the first frame equals the pixel the object
-// already drew, so step 0 is the plain room. `dy` is relative to the floor top,
-// so the pixel stays on its object at every room height. Every scene ships at
-// least one changing entry; OC_DITTO_AMBIENT=0 disables all of them.
+// the first frame equals the pixel the object already drew, so step 0 is the
+// plain room; `dy` is relative to the floor top
 const ANIM_DEFS: Array<{ x: number; dy: number; frames: string[]; every: number }> =
   Array.isArray(currentArt.anim) ? currentArt.anim : []
 let ambientStep = 0
@@ -508,24 +282,22 @@ const drawnTopOf = (d: Ditto) => drawnFeetOf(d) - heightOf(d) + 1
 const overlaps = (a: Box, b: Box) =>
   a.l - 1 <= b.r && b.l - 1 <= a.r && a.t - 1 <= b.b + 1 && b.t - 1 <= a.b + 1
 
-// the boxes a standing Ditto occupies; a hopping one reserves its raised box
-// AND its ground box, so nobody can slide underneath and be hit on landing
+// the boxes a standing Ditto occupies; a hopping one reserves its raised box AND
+// its ground box, so nobody can slide underneath and be hit on landing
 const occupied = (d: Ditto): Box[] => {
   const ground = boxAt(d.cx, d.feetY, bandOf(d.feetY))
   const raised = boxAt(d.cx, drawnFeetOf(d), bandOf(d.feetY))
   return hopOffset(d.hop) === 0 ? [ground] : [raised, ground]
 }
 
-// Depth relation between two feet rows. Same plane: the full sprite boxes must
-// not touch. Different plane: overlap is allowed and paint order decides who is
-// in front.
+// same plane: the full sprite boxes must not touch; different plane: overlap is
+// allowed and paint order decides who is in front
 const sameDepth = (aFeet: number, bFeet: number) => Math.abs(aFeet - bFeet) <= SAME_DEPTH_PX
 
 // a drawn Ditto plus its boxes, the unit of every depth-aware test
 type Occupant = { cx: number; feet: number; boxes: Box[] }
 const occupantOf = (d: Ditto): Occupant => ({ cx: d.cx, feet: d.feetY, boxes: occupied(d) })
 
-// every drawn Ditto except one
 const otherOccupants = (dittos: Map<string, Ditto>, selfId: string): Occupant[] => {
   const out: Occupant[] = []
   for (const [id, o] of dittos) {
@@ -535,9 +307,8 @@ const otherOccupants = (dittos: Map<string, Ditto>, selfId: string): Occupant[] 
   return out
 }
 
-// a position is free when it is inside the room and on the floor, and every
-// other Ditto AT THE SAME DEPTH is clear of its full box. Cross-depth Dittos are
-// ignored here on purpose: they may overlap and are sorted at paint time.
+// free when inside the room and on the floor and every other Ditto AT THE SAME
+// DEPTH is clear of its full box; cross-depth overlap is left to the paint order
 const freeAgainst = (occ: Occupant[], cx: number, feet: number) => {
   if (feet < scene.floorMin || feet > scene.floorMax) return false
   const box = boxAt(cx, feet, bandOf(feet))
@@ -552,16 +323,15 @@ const freeAgainst = (occ: Occupant[], cx: number, feet: number) => {
 const spotFree = (dittos: Map<string, Ditto>, selfId: string, cx: number, feet: number) =>
   freeAgainst(otherOccupants(dittos, selfId), cx, feet)
 
-// does a candidate position's full sprite box touch this occupant at any depth?
-// Used only for spawn preference, to try for a readable non-overlapping spot
-// before falling back to legal cross-depth overlap.
+// does a candidate's full sprite box touch this occupant at any depth? Spawn
+// preference only: try a readable spot before legal cross-depth overlap
 const touchesOccupant = (o: Occupant, cx: number, feet: number) => {
   const box = boxAt(cx, feet, bandOf(feet))
   return o.boxes.some((b) => overlaps(box, b))
 }
 
 // a raised box must stay inside the buffer and clear of every Ditto at the same
-// depth as the Ditto's ground position; cross-depth sprites may overlap
+// depth as the ground position; cross-depth sprites may overlap
 const raisedFree = (dittos: Map<string, Ditto>, selfId: string, d: Ditto, off: number) => {
   const s = bandOf(d.feetY)
   const box = boxAt(d.cx, d.feetY - off, s)
@@ -602,7 +372,7 @@ const paint = (
 }
 
 // The selected scene's flat background: wall, baseboard, floor, plank seams and
-// every object, anchored to the floor line. No gradients, no contact shading.
+// every object, anchored to the floor line, with no gradients or contact shading.
 const paintRoom = (buf: Array<string | null>) => {
   const wall = currentArt.palette[currentArt.wall] ?? null
   const floor = currentArt.palette[currentArt.floor] ?? null
@@ -640,9 +410,8 @@ const shade = (hex: string) => {
   return `#${hx(r)}${hx(g)}${hx(b)}`
 }
 
-// the shadow sits on the ground row below the feet, never on the raised one; it
-// covers the foot span minus one pixel at each end, and the inner 4 pixels while
-// the Ditto is airborne on a hop
+// the shadow sits on the ground row below the feet, never the raised one, covers
+// the foot span minus one pixel at each end and the inner 4 while airborne
 const paintShadow = (buf: Array<string | null>, d: Ditto) => {
   const s = setOf(d.feetY)
   const w = s.w
@@ -686,9 +455,8 @@ const compose = (list: Ditto[], parity: number, badge: string): Frame => {
   // ambient pixels sit on the background, under shadows, sprites and bubbles
   paintAnim(buf, ambientStep)
 
-  // back to front: sorted by feet y so the lower (larger) Ditto is drawn last
   const shown = list.filter((d) => !d.queued && (d.mode !== "popout" || parity % 2 === 0))
-  // depth order: ground feet y, farthest first; ties by creation seq. Sorting by
+  // sorted by ground feet y, farthest first; ties by creation seq. Sorting by
   // ground feet (not the lifted feet) keeps occlusion stable during hops.
   const sorted = [...shown].sort((p, q) => p.feetY - q.feetY || p.seq - q.seq)
 
@@ -775,12 +543,8 @@ const newDitto = (seq: number, kind: DittoKind): Ditto => ({
 
 // ------------------------------------------------------ placement grid
 
-// Standing positions are drawn from a coarse grid instead of random pixels: a
-// full scan can tell "no spot" apart from "20 random tries failed", and a spawn
-// can pick the spot that leaves the most room behind it. The grid is only a
-// candidate list, never a collision shortcut: every use is still validated by
-// spotFree. Step 4 x 3 keeps neighbours far enough apart that the same list can
-// be packed, without making the walk targets look mechanical.
+// Standing positions come from a coarse grid so a full scan can tell "no spot"
+// apart from "20 random tries failed"; every candidate is still spotFree-checked.
 const SPOT_STEP_X = 4
 const SPOT_STEP_Y = 3
 type Spot = { cx: number; feet: number }
@@ -876,8 +640,8 @@ const drawnCount = (dittos: Map<string, Ditto>) => {
   return n
 }
 
-// stand between two actions and breathe; 3 to 12 ticks, the shortest pause of
-// the whole cycle, so a lone Ditto is never still for long
+// stand between actions and breathe; 3 to 12 ticks, the shortest pause of the
+// cycle, so a lone Ditto is never still for long
 const stand = (d: Ditto) => {
   d.mode = "idle"
   d.action = "idle"
@@ -1002,7 +766,7 @@ const pickAction = (dittos: Map<string, Ditto>, id: string, d: Ditto) => {
   stand(d)
 }
 
-// the end of a visit: stand at the point of interest, show its emote, or nap
+// the end of a visit: stand at the point of interest and show its emote, or nap
 // there when the point asks for zzz (the nap rules, but only 14 ticks)
 const arriveAtPoi = (d: Ditto) => {
   const p = d.poi >= 0 ? POIS[d.poi] : undefined
@@ -1118,8 +882,8 @@ const stepAction = (dittos: Map<string, Ditto>, id: string, d: Ditto) => {
   }
 }
 
-// can this Ditto start a chat right now? only from wander or idle standing, a
-// visit only once it has arrived, never from dance, jump, lookaround or nap
+// can this Ditto start a chat now? only from wander or idle standing, a visit
+// only once it has arrived, never from dance, jump, lookaround or nap
 const canChat = (d: Ditto) => {
   if (d.mode === "wander") return d.action === "wander"
   if (d.mode === "idle") return d.action === "idle" || d.action === "visit" || d.action === "emote"
@@ -1355,10 +1119,7 @@ const stepDitto = (dittos: Map<string, Ditto>, id: string, d: Ditto) => {
 }
 
 // COMPANION_POLICY_START
-// Minimum population rule when companions are enabled: 0 active agents -> 2
-// companions, 1 -> 1 companion, 2 or more -> none. Disabled companions always
-// target 0. Kept as plain JavaScript so the test suite can evaluate this exact
-// function without a JSX loader.
+// 0 agents -> 2 companions, 1 -> 1, 2+ -> none, disabled -> 0; plain JS for the tests.
 const companionTarget = (agents, companionsOn = true) =>
   companionsOn ? (agents <= 0 ? 2 : agents === 1 ? 1 : 0) : 0
 // COMPANION_POLICY_END
@@ -1368,8 +1129,8 @@ export default Plugin.define({
   id: "chengo.ditto-room",
   setup(context) {
     const data = context.data
-    // children that ended through an execution.failed / interrupted event
-    // (session ids only, never logged)
+    // children that ended through an execution.failed / interrupted event (ids
+    // only, never logged)
     const failedIDs = new Set<string>()
     const [failedTick, setFailedTick] = createSignal(0)
     const offs: Array<() => void> = []
@@ -1385,8 +1146,8 @@ export default Plugin.define({
       return Number.isFinite(n) ? n : undefined
     }
 
-    // Active / ended decision for one child (rules in the header comment).
-    // Reads are reactive; any failure degrades to status() alone.
+    // Active / ended decision for one child; reads are reactive and any failure
+    // degrades to status() alone.
     const classify = (id: string, parentRunning: (id: string) => boolean): { active: boolean } => {
       try {
         const running = data.session.status(id) === "running"
@@ -1410,9 +1171,8 @@ export default Plugin.define({
       }
     }
 
-    // ditto state, keyed by session id for agents and by companion<N> for
-    // fillers (the keys are never logged or rendered). activeAgentCount is the
-    // number of really active child sessions, never the number of Dittos.
+    // agents are keyed by session id, companions by companion<N>; keys are never
+    // logged or rendered. activeAgentCount counts real children, not Dittos.
     const dittos = new Map<string, Ditto>()
     const chats: Chat[] = []
     let parity = 0
@@ -1436,15 +1196,8 @@ export default Plugin.define({
       log(`agents: ${activeAgentCount}, companions: ${companionCount()}`)
     }
 
-    // Bring the companion count to the target for the current policy. When
-    // companions are disabled the target is always 0, so no synthetic Dittos are
-    // created and any existing ones are removed. When the target is above the
-    // current count, new companions are queued and pop in through the normal
-    // placement; surplus companions pop out (newest first) and are removed by
-    // the tick, while a queued surplus is dropped at once. A companion in a chat
-    // has that chat ended before it leaves. This runs from the spawn effect and
-    // from every tick, so a companion removed during a pop-out is replenished on
-    // the next tick.
+    // bring the companion count to the policy target: new ones queue and pop in,
+    // surplus ones pop out newest first after their chat ends
     const reconcileCompanions = (agents: number) => {
       const want = companionTarget(agents, COMPANIONS_ON)
       const have = companions()
@@ -1479,14 +1232,8 @@ export default Plugin.define({
       return q > 99 ? "+99" : `+${q}`
     }
 
-    // place a queued Ditto on the free spot that leaves the most room behind it.
-    // Every candidate is a real standing spot (freeAgainst); the score is the
-    // number of other candidates that stay free once this one is taken, with
-    // random tie breaking. A companion prefers a spot within chat reach of an
-    // existing Ditto, and every spawn prefers a spot whose full sprite does not
-    // touch anyone at all; cross-depth overlap is used only when nothing cleaner
-    // is free. The pop-in hop runs only when the raised box is free, so a packed
-    // front row still pops in with squash plus sparkle.
+    // place a queued Ditto on the free spot that keeps the most other candidates
+    // free, preferring chat reach for companions and no contact at all for spawns
     const tryPlace = (id: string, d: Ditto): boolean => {
       const others = otherOccupants(dittos, id)
       const free = spotCandidates().filter((c) => freeAgainst(others, c.cx, c.feet))
@@ -1591,10 +1338,8 @@ export default Plugin.define({
       }
     }
 
-    // the terminal height changed: a Ditto whose feet fell outside the new floor
-    // is requeued (never moved into someone else's box) and pops back in on the
-    // next tick through the packing placement. Dittos that still fit keep their
-    // spot; their targets and hops are clamped to the new floor.
+    // the height changed: a Ditto whose feet fell outside the new floor is
+    // requeued and pops back in next tick, the rest keep their clamped spot
     const fitScene = () => {
       for (const d of dittos.values()) {
         if (d.queued) continue
@@ -1642,9 +1387,8 @@ export default Plugin.define({
       timer = setInterval(tick, TICK_MS)
     }
 
-    // the slow ambient clock runs whenever the room is visible, even with no
-    // Dittos; it only recomposes when the 200 ms Ditto ticker is stopped (that
-    // ticker recomposes anyway) and only when an animated pixel changed
+    // the slow ambient clock runs whenever the room is visible; it recomposes
+    // only when the 200 ms ticker is stopped and a pixel actually changed
     let ambientTimer: ReturnType<typeof setInterval> | undefined
     const stopAmbient = () => {
       if (ambientTimer !== undefined) { clearInterval(ambientTimer); ambientTimer = undefined }
@@ -1664,8 +1408,7 @@ export default Plugin.define({
 
     if (DEMO > 0) {
       // same path as real sessions: created queued, placed by the tick. DEMO
-      // counts fake AGENTS; the minimum population adds companions on top when
-      // companions are enabled.
+      // counts fake agents; the companions are added on top.
       for (let i = 0; i < DEMO; i++) dittos.set(`demo${i}`, newDitto(seq++, "agent"))
       activeAgentCount = DEMO
       reconcileCompanions(activeAgentCount)
@@ -1743,9 +1486,8 @@ export default Plugin.define({
         }
       })
 
-      // spawn (queued, then pop-in when a spot frees) and despawn (pop-out, or
-      // dropped silently when it was still queued); a Ditto that is popping out
-      // keeps its box and its map entry until its 5 ticks are over
+      // spawn queued, despawn with a pop-out (silently when still queued); a
+      // popping-out Ditto keeps its box and map entry for its 5 ticks
       createEffect(() => {
         if (DEMO > 0) return
         const ids = activeIDs()
@@ -1779,9 +1521,8 @@ export default Plugin.define({
         notePopulation()
       })
 
-      // 5 fps ticker, only while there is something to animate: an empty
-      // permanent room has no Ditto to move, so the tick stays stopped until a
-      // Ditto spawns or is queued (count() changes and this effect runs again)
+      // 5 fps ticker, only while there is something to animate: the tick stays
+      // stopped until a Ditto spawns or is queued
       createEffect(() => {
         const n = count()
         if (n === 0 && DEMO === 0) { stopTimer(); return }
@@ -1793,10 +1534,8 @@ export default Plugin.define({
       const floorRows = () => legacyRowsFor(rows())
       const visible = () => (DEMO > 0 ? true : count() > 0 || ALWAYS) && rows() >= MIN_HEIGHT && roomRows() > 0
 
-      // Responsive height: derive the compact room rows and the preserved floor
-      // rows of the same terminal tier, then recompose. The key includes both,
-      // because two adjacent terminal sizes can share a total height but need a
-      // different wall/floor split.
+      // derive the compact and preserved floor rows of the same tier, then
+      // recompose: adjacent sizes can share a height but need a different split
       let appliedKey = ""
       createEffect(() => {
         const compact = roomRows()

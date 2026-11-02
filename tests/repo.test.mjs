@@ -31,7 +31,6 @@ test("no private paths or attribution trailers in shipped text files", () => {
     "tests/scenes.test.mjs",
     "tools/render-scenes.mjs",
     "tools/make-sheets.py",
-    "docs/scenes.md",
   ]) {
     const text = read(file)
     for (const needle of forbidden) {

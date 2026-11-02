@@ -120,7 +120,7 @@ make_sheet(
 )
 
 # Tracked public previews. The full set stays local under previews/; these two
-# sanitized tall sheets are the ones the README and docs/scenes.md embed.
+# sanitized tall sheets are the ones the README embeds.
 PUBLIC.mkdir(exist_ok=True)
 shutil.copyfile(scene_tall, PUBLIC / "scenes-contact-sheet.png")
 shutil.copyfile(ditto_tall, PUBLIC / "dittos-contact-sheet.png")

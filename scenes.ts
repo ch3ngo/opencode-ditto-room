@@ -1,13 +1,7 @@
-// Scene data for the Ditto room. The runtime selects one scene at startup with
-// OC_DITTO_SCENE and paints it through the compositor in tui.tsx. The Living Room
-// entry reuses the exact art.ts exports, so the current default cannot drift; the
-// other five are new flat scene data. The local preview tools consume the same
-// SCENES array.
-//
-// Scene geometry follows the art contract: ROOM_W is 38 pixels, one pixel is one
-// cell wide and half a cell tall, and objects are bottom aligned and anchored to
-// the floor line or the deepest floor row. Outdoor scenes use an empty baseboard
-// because the wall meets the ground directly.
+// Scene data for the Ditto room: the six scenes are picked once at startup by
+// OC_DITTO_SCENE and painted by the compositor in tui.tsx. The Living Room reuses
+// the art.ts exports, so the default cannot drift. ROOM_W is 38 pixels, objects
+// are bottom aligned to the floor and outdoor scenes use an empty baseboard.
 import {
   PALETTE as LIVING_PALETTE,
   WALL_COLOR as LIVING_WALL,
@@ -59,7 +53,7 @@ export type Scene = {
   anim: SceneAnim[]
 }
 
-// A 38-wide stand band with generic crowd colours. No team marks or logos.
+// A 38-wide stand band with generic crowd colours, no team marks or logos.
 const STAND_CROWD = "turuyr".repeat(6) + "tu"
 const STAND_PLAIN = "t".repeat(38)
 const STAND_LOWER = "u".repeat(38)
@@ -654,8 +648,8 @@ export const SCENES: Scene[] = [
   },
 ]
 
-// Stable scene IDs for OC_DITTO_SCENE. The order is the documented order and
-// Living Room is first, so it is also the safe fallback for an invalid value.
+// Stable scene IDs for OC_DITTO_SCENE; Living Room is first, so it is also the
+// safe fallback for an invalid value.
 export const SCENE_IDS = SCENES.map((s) => s.id)
 
 export const findScene = (id: string) => SCENES.find((s) => s.id === id)
@@ -663,10 +657,8 @@ export const findScene = (id: string) => SCENES.find((s) => s.id === id)
 export type SceneSource = "explicit" | "random" | "fallback"
 export type SceneChoice = { scene: Scene; source: SceneSource }
 
-// Pick a scene once, at startup. A valid ID pins it; unset or "random" picks
-// one; anything else falls back to Living Room. The caller keeps the returned
-// object for the whole TUI lifetime, so resizes, tabs and child sessions cannot
-// change it.
+// Pick a scene once at startup: a valid ID pins it, unset or "random" picks one,
+// anything else falls back to Living Room. The caller keeps it for the lifetime.
 export const chooseScene = (raw: string | undefined, random: () => number = Math.random): SceneChoice => {
   const requested = (raw ?? "").trim().toLowerCase()
   if (requested && requested !== "random") {
