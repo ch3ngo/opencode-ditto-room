@@ -1,16 +1,16 @@
 # opencode-ditto-room
 
-A pixel-art Ditto room for the OpenCode TUI session sidebar. Every active direct child session gets a pink Ditto. When fewer than two agents are running, shiny blue companion Dittos keep the room populated.
+A pixel-art Ditto room for the OpenCode TUI session sidebar. Every active direct child session gets a pink Ditto. When companions are enabled (the default) and fewer than two agents are running, shiny blue companion Dittos keep the room populated.
 
 ![The Ditto room at 20 rows with one pink Ditto and one blue companion](preview.png)
 
-Status: v1.0.0, tested with OpenCode 2.2.4. Two source files, no build step, no npm dependencies at runtime.
+Status: v1.1.0 (local, unpublished), tested with OpenCode 2.2.4. Two source files, no build step, no npm dependencies at runtime.
 
 ## What it does
 
 - Draws a full-bleed, 38-cell-wide pixel-art room at the bottom of the session sidebar, directly above the built-in cwd and branch line.
 - Shows one pink Ditto per direct child session that is active right now. A Ditto pops in when its child starts and pops out when it ends.
-- Keeps a minimum of two Dittos on screen: 0 active agents gives 2 blue companions, 1 gives 1 pink plus 1 blue, 2 or more gives pink only.
+- Keeps a minimum of two Dittos on screen when companions are enabled (the default): 0 active agents gives 2 blue companions, 1 gives 1 pink plus 1 blue, 2 or more gives pink only. With `OC_DITTO_COMPANIONS=0`, only real active agents appear.
 - Draws at most 8 Dittos and queues the rest, shown as a `+N` badge.
 - Animates solo behaviour (wander, visit, dance, jump, look around, emote, nap), chats between Dittos, speech bubbles, foot shadows and a few ambient pixels.
 - Uses depth-aware overlap: Dittos at different floor depths may pass behind each other, while Dittos on the same plane keep their distance.
@@ -92,16 +92,18 @@ Set these environment variables before starting the TUI:
 
 | Variable | Default | Effect |
 |---|---|---|
-| `OC_DITTO_DEMO` | off | Integer 1 to 12. Ignores real session data and animates N fake agent Dittos through the normal spawn and queue logic, plus the companions the minimum rule requires. Useful for previewing behaviour without starting subagents. |
+| `OC_DITTO_DEMO` | off | Integer 1 to 12. Ignores real session data and animates N fake agent Dittos through the normal spawn and queue logic, plus the companions the minimum rule requires when companions are enabled. Useful for previewing behaviour without starting subagents. |
+| `OC_DITTO_COMPANIONS` | on | `0` disables the blue filler companions. Any other value, or leaving it unset, keeps them on. Only real active agent Dittos remain; with 0 agents the room can be empty. |
 | `OC_DITTO_MIN_HEIGHT` | `28` | Hides the room when `process.stdout.rows` is below this value. Must be an integer from 0 to 1000. Values below 28 have no practical effect because the room cannot render below 28 terminal rows. |
 | `OC_DITTO_AMBIENT` | on | `0` stops the ambient object pixels. Any other value, or leaving it unset, keeps them on. |
-| `OC_DITTO_ALWAYS` | on | Compatibility flag from an older build. `0` used to hide an empty room. With the minimum population the room is never empty, so the flag is effectively inert; any other value or unset keeps the current behaviour. |
+| `OC_DITTO_ALWAYS` | on | Empty-room visibility flag, kept for compatibility. With companions enabled (the default) the room is never empty, so it has no practical effect. With `OC_DITTO_COMPANIONS=0` and 0 active agents, `0` hides the empty room; any other value or unset keeps it visible. |
 
 Examples:
 
 ```bash
 OC_DITTO_DEMO=2 opencode
 OC_DITTO_AMBIENT=0 opencode
+OC_DITTO_COMPANIONS=0 opencode
 ```
 
 There is no `OC_DITTO_ROOM_ROWS`. The room height is derived from the terminal on every resize.
@@ -141,15 +143,27 @@ The current art ships one 14 x 11 set. The engine reads `w` and `h` from the set
 - `POIS` lists the places a lone Ditto may visit: window (`sparkle`), lamp (`note`) and rug (`zzz`). `cx` is the horizontal centre, `at` is `"back"` (floor top plus offset) or `"front"` (last usable feet row minus offset), and `emote` must be one of `EMOTE_NAMES`. Every point must be a legal standing spot at every supported height.
 - `ANIM` lists ambient pixels as `{ x, dy, frames, every }`. `dy` is relative to the floor top, `frames` are palette keys, and `every` is the number of 600 ms ambient ticks per step. The first frame must match the pixel already drawn by the object underneath, so step 0 is the plain room.
 
-### Disable the blue companions
+### Blue companions
 
-There is no environment variable for this in v1.0.0. It is a one-line source edit in `tui.tsx`:
+Companions are enabled by default. Disable them with:
 
-```ts
-export const companionTarget = (agents: number) => 0
+```bash
+OC_DITTO_COMPANIONS=0 opencode
 ```
 
-Restart the TUI. With no active agents the room is then empty, but it stays visible because `OC_DITTO_ALWAYS` defaults to on, and the ambient pixels keep moving. Agents still appear normally.
+With companions disabled, no synthetic filler Dittos are created. Only real active agents appear:
+
+| Active agents | Companions enabled (default) | `OC_DITTO_COMPANIONS=0` |
+|---|---|---|
+| 0 | 2 blue companions | none, empty room |
+| 1 | 1 pink plus 1 blue | 1 pink |
+| 2 or more | one pink per active agent | one pink per active agent |
+
+Agents keep their real session ids, active detection, overflow queue and cap. There are no phantom children and no synthetic ids in the log. Any existing companions are removed through the normal pop-out path.
+
+The empty room at 0 agents follows the existing visibility rules: it stays visible while `OC_DITTO_ALWAYS` is unset or not `0` (the default), and `OC_DITTO_ALWAYS=0` hides it. `OC_DITTO_MIN_HEIGHT` and the terminal height gate apply exactly as before. With the room visible, ambient pixels keep moving unless `OC_DITTO_AMBIENT=0`; with the room hidden, nothing is drawn.
+
+The exported `companionTarget` function is the policy point if you maintain a fork, but changing the built-in default is not needed for the supported toggle. The environment variable is read when the TUI starts, so restart after changing it.
 
 ### Behaviour knobs
 
@@ -166,9 +180,8 @@ These constants in `tui.tsx` control the runtime:
 
 ## Roadmap
 
-Planned for a later release, not implemented in v1.0.0:
+Planned for a later release, not implemented in v1.1.0:
 
-- A supported companion toggle, for example `OC_DITTO_COMPANIONS=0`, instead of the source edit above.
 - Multiple built-in scenes and a way to choose one.
 - A random scene per OpenCode session start.
 
@@ -193,7 +206,7 @@ Run the dependency-free checks:
 node --test tests/*.test.mjs
 ```
 
-The tests validate the art contract: palette keys, row widths, frame names and sizes, object bounds, emote, bubble and glyph sizes, point-of-interest bounds, ambient frames, the relative import in `tui.tsx`, and the absence of private paths and attribution trailers in shipped text files. They also confirm the MIT license and the PNG preview.
+The tests validate the art contract: palette keys, row widths, frame names and sizes, object bounds, emote, bubble and glyph sizes, point-of-interest bounds, ambient frames, the relative import in `tui.tsx`, the companion policy and its environment wiring, and the absence of private paths and attribution trailers in shipped text files. They also confirm the MIT license and the PNG preview.
 
 Manual TUI verification for v1.0.0 was done on 02/11/2026 with OpenCode 2.2.4 in tmux at terminal sizes from 140x28 to 140x44 and 122x34, using `OC_DITTO_DEMO` 1, 2 and 8, a childless session for 0 agents, and ambient on and off. The checked points were:
 
@@ -203,6 +216,8 @@ Manual TUI verification for v1.0.0 was done on 02/11/2026 with OpenCode 2.2.4 in
 - Demo 8 draws 6 plus 2 queued at 34 rows and 8 at 40 rows.
 - A 40 to 34 to 44 to 36 to 35 to 28 to 40 resize run with no `overlap fixed` entries.
 
+Manual TUI verification for v1.1.0 was done on 02/11/2026 with a throwaway `OPENCODE_CONFIG_DIR` and `OC_DITTO_DEMO` 0, 1, 2 and 8, with `OC_DITTO_COMPANIONS` unset and `0`. The plugin log showed `companions: 2` at 0 agents, `1` at 1 agent and `0` at 2 or more with the default, and `0` for all four populations when companions were disabled, with no phantom companion ids. A color capture of the visible room showed zero blue companion body pixels when disabled at 0, 1 and 2 agents, and blue plus pink with the default at 1 agent. Visibility was checked through a temporary prompt-footer mount, because the headless empty-session sidebar covers sidebar plugin slots. With 0 agents, companions disabled and `OC_DITTO_ALWAYS` at its default, the empty room stayed visible; `OC_DITTO_ALWAYS=0` hid it; with 2 agents, `OC_DITTO_ALWAYS=0` did not hide it; with companions enabled, `OC_DITTO_ALWAYS=0` also did not hide it because the two companions keep the room non-empty; `OC_DITTO_MIN_HEIGHT=40` at 34 rows hid it. Room heights were rechecked from 28 to 44 terminal rows and the hidden case at 27.
+
 Not verified: real spawn and despawn on a live subagent, native terminal colours outside tmux, and the 4-pixel depth threshold over a long real session.
 
 ## Project layout
@@ -211,6 +226,7 @@ Not verified: real spawn and despawn on a live subagent, native terminal colours
 art.ts                 art data, no imports or functions
 tui.tsx                plugin, renderer, movement and session tracking
 tests/art.test.mjs     art contract checks
+tests/companions.test.mjs  companion policy and env wiring checks
 tests/repo.test.mjs    license, privacy and preview checks
 preview.png            static render of the art at 20 rows
 LICENSE                MIT license for the code

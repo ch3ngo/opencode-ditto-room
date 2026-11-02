@@ -18,7 +18,21 @@ const forbidden = [
 ]
 
 test("no private paths or attribution trailers in shipped text files", () => {
-  for (const file of ["tui.tsx", "art.ts", "README.md", "CHANGELOG.md", "LICENSE", ".gitignore", "tests/art.test.mjs"]) {
+  for (const file of [
+    "tui.tsx",
+    "art.ts",
+    "scenes.ts",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    ".gitignore",
+    "tests/art.test.mjs",
+    "tests/companions.test.mjs",
+    "tests/scenes.test.mjs",
+    "tools/render-scenes.mjs",
+    "tools/make-sheets.py",
+    "docs/scenes.md",
+  ]) {
     const text = read(file)
     for (const needle of forbidden) {
       assert.ok(!text.includes(needle), `${file} contains '${needle}'`)

@@ -84,13 +84,16 @@
 // child. Companions are synthetic (`companion<N>`), have no session behind them,
 // and exist only to keep at least two Dittos on screen: 0 active agents -> 2 blue
 // companions, 1 -> 1 pink agent plus 1 blue companion, 2 or more -> agents only.
-// A new companion is queued and placed through the normal packing (preferring a
-// spot within chat reach of an existing Ditto); a surplus companion pops out,
-// newest first, after any chat it is in is ended. Reconciliation runs on every
-// active-set change and every tick, so a companion removed during a pop-out is
-// replenished, and a popping-out agent is never counted as a companion. Companions
-// use every solo and social behaviour, count toward MAX_DITTOS and the queue, and
-// are logged separately from the active agent count.
+// With OC_DITTO_COMPANIONS=0 no companions are created; only real active agents
+// appear, and 0 agents leaves the room empty, with visibility still following
+// OC_DITTO_ALWAYS and the terminal height gate. A new companion is queued and
+// placed through the normal packing, preferring a spot within chat reach of an
+// existing Ditto; a surplus companion pops out, newest first, after any chat it
+// is in is ended. Reconciliation runs on every active-set change and every tick,
+// so a companion removed during a pop-out is replenished, and a popping-out
+// agent is never counted as a companion. Companions use every solo and social
+// behaviour, count toward MAX_DITTOS and the queue, and are logged separately
+// from the active agent count.
 //
 // Loaded from cli.json ("plugins"), NOT from plugins/ (a TUI-only part is not a
 // server plugin). Docs: https://opencode.ai/v2/docs/build/plugins/cli/ ("Slots").
@@ -185,11 +188,17 @@
 // Env vars (set before starting the TUI):
 //   OC_DITTO_DEMO       integer 1..12: ignore session data, animate N fake
 //                       AGENT Dittos through the same spawn/queue logic, and add
-//                       the companion the minimum rule requires; off by default
-//   OC_DITTO_ALWAYS=0   old opt-out for an empty room. With the minimum
-//                       population there are always at least two companions, so
-//                       count() is never 0 and the room stays visible; the flag
-//                       is effectively inert now and kept for compatibility
+//                       the companions the minimum rule requires when companions
+//                       are enabled; off by default
+//   OC_DITTO_COMPANIONS=0 disable the blue filler companions. Enabled by default;
+//                       only real active agent Dittos remain. With 0 agents,
+//                       count() is 0, so the empty room follows OC_DITTO_ALWAYS
+//                       and the height gate as described below
+//   OC_DITTO_ALWAYS=0   hide an empty room. With companions enabled (default)
+//                       there are always at least two, so count() is never 0 and
+//                       the flag has no practical effect; with
+//                       OC_DITTO_COMPANIONS=0 and 0 agents it hides the empty
+//                       room
 //   OC_DITTO_MIN_HEIGHT integer, hide the room when stdout rows < it (default
 //                       28, the minimum that fits a 16 row room plus 12 rows of
 //                       sidebar). Ignored if not an integer in 0..1000
@@ -325,6 +334,9 @@ let scene: Scene = sceneFor(COMPACT_ROWS_MIN, LEGACY_ROWS_MIN)
 const DEMO = parseIntIn(process.env.OC_DITTO_DEMO, 0, 1, 12)
 // On by default: only an explicit OC_DITTO_ALWAYS=0 hides the empty room.
 const ALWAYS = (process.env.OC_DITTO_ALWAYS ?? "").trim() !== "0"
+// Blue filler companions are on by default; only an explicit
+// OC_DITTO_COMPANIONS=0 disables them.
+const COMPANIONS_ON = (process.env.OC_DITTO_COMPANIONS ?? "").trim() !== "0"
 // hide the room below this many terminal rows
 const MIN_HEIGHT = parseIntIn(process.env.OC_DITTO_MIN_HEIGHT, ROOM_HIDE_BELOW, 0, 1000)
 const MAX_DITTOS = 8
@@ -1333,9 +1345,15 @@ const stepDitto = (dittos: Map<string, Ditto>, id: string, d: Ditto) => {
   }
 }
 
-// Minimum population rule: 0 active agents -> 2 companions, 1 -> 1 companion,
-// 2 or more -> no companions. Exported so the rule can be tested directly.
-export const companionTarget = (agents: number) => (agents <= 0 ? 2 : agents === 1 ? 1 : 0)
+// COMPANION_POLICY_START
+// Minimum population rule when companions are enabled: 0 active agents -> 2
+// companions, 1 -> 1 companion, 2 or more -> none. Disabled companions always
+// target 0. Kept as plain JavaScript so the test suite can evaluate this exact
+// function without a JSX loader.
+const companionTarget = (agents, companionsOn = true) =>
+  companionsOn ? (agents <= 0 ? 2 : agents === 1 ? 1 : 0) : 0
+// COMPANION_POLICY_END
+export { companionTarget }
 
 export default Plugin.define({
   id: "chengo.ditto-room",
@@ -1409,14 +1427,17 @@ export default Plugin.define({
       log(`agents: ${activeAgentCount}, companions: ${companionCount()}`)
     }
 
-    // Bring the companion count to the minimum rule. New companions are queued
-    // and pop in through the normal placement; surplus companions pop out (newest
-    // first) and are removed by the tick, while a queued surplus is dropped at
-    // once. A companion in a chat has that chat ended before it leaves. This runs
-    // from the spawn effect and from every tick, so a companion removed during a
-    // pop-out is replenished on the next tick.
+    // Bring the companion count to the target for the current policy. When
+    // companions are disabled the target is always 0, so no synthetic Dittos are
+    // created and any existing ones are removed. When the target is above the
+    // current count, new companions are queued and pop in through the normal
+    // placement; surplus companions pop out (newest first) and are removed by
+    // the tick, while a queued surplus is dropped at once. A companion in a chat
+    // has that chat ended before it leaves. This runs from the spawn effect and
+    // from every tick, so a companion removed during a pop-out is replenished on
+    // the next tick.
     const reconcileCompanions = (agents: number) => {
-      const want = companionTarget(agents)
+      const want = companionTarget(agents, COMPANIONS_ON)
       const have = companions()
       if (have.length < want) {
         for (let i = have.length; i < want; i++) {
@@ -1634,7 +1655,8 @@ export default Plugin.define({
 
     if (DEMO > 0) {
       // same path as real sessions: created queued, placed by the tick. DEMO
-      // counts fake AGENTS; the minimum population adds companions on top.
+      // counts fake AGENTS; the minimum population adds companions on top when
+      // companions are enabled.
       for (let i = 0; i < DEMO; i++) dittos.set(`demo${i}`, newDitto(seq++, "agent"))
       activeAgentCount = DEMO
       reconcileCompanions(activeAgentCount)

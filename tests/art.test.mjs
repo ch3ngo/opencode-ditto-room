@@ -129,5 +129,5 @@ test("tui.tsx imports its art and registers a local plugin", () => {
   assert.match(source, /from "\.\/art"/)
   assert.match(source, /Plugin\.define\(/)
   assert.match(source, /sidebar\.footer/)
-  assert.match(source, /export const companionTarget/)
+  assert.match(source, /companionTarget/)
 })

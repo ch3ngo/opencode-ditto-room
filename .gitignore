@@ -5,3 +5,7 @@ node_modules/
 Thumbs.db
 dist/
 *.tmp
+__pycache__/
+
+# Local scene preview output, not release assets
+previews/
