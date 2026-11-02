@@ -2,13 +2,20 @@
 
 All notable changes to this project are recorded here. Dates use DD/MM/YYYY.
 
-## 1.1.0 (unreleased, 02/11/2026)
+## 1.1.0 (02/11/2026)
 
 - Add the supported `OC_DITTO_COMPANIONS=0` toggle. Companions stay enabled by default, so the existing minimum-two behaviour is unchanged.
 - With companions disabled, only real active agent Dittos appear. The policy is 0/0/0 for 0, 1 and 2 or more active agents, with no synthetic companion ids and no phantom children.
 - The empty room at 0 agents keeps the existing visibility semantics: it stays visible while `OC_DITTO_ALWAYS` is unset or not `0`, and `OC_DITTO_ALWAYS=0` hides it. `OC_DITTO_MIN_HEIGHT` and the height gate are unchanged.
 - Agent identities, active detection, overflow queue and the 8 Ditto cap are unchanged.
-- Add companion policy tests and document the current vs planned customization.
+- Add six integrated scenes: Living Room, Mountain Meadow, Japanese Garden, Office, Arcade and Football Stadium.
+- Add `OC_DITTO_SCENE` with stable IDs. Unset or `random` chooses once per TUI startup; a valid ID pins the scene; an invalid value falls back to Living Room.
+- Every scene has ambient animation. `OC_DITTO_AMBIENT=0` stops all scene ambient pixels.
+- Add the Japanese Garden rear-edge pond with water ripple ambient entries. The pond has no terrain collision and does not block movement.
+- Add shared scene rendering, per-scene points of interest and per-scene ambient data without duplicating the Living Room default.
+- Ship `tui.tsx`, `art.ts` and `scenes.ts` as one three-file installation.
+- Add public scene and Ditto preview sheets, local preview tooling, scene selection tests, geometry tests and ambient tests.
+- Add companion policy tests and document current versus planned customization.
 
 ## 1.0.0 (02/11/2026)
 

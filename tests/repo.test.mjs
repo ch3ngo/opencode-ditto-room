@@ -50,14 +50,20 @@ test("license is MIT with the configured author", () => {
 
 test("gitignore keeps local and generated files out of the repository", () => {
   const ignore = read(".gitignore")
-  for (const entry of ["node_modules/", "*.log", ".DS_Store"]) {
+  for (const entry of ["node_modules/", "*.log", ".DS_Store", "previews/"]) {
     assert.ok(ignore.includes(entry), `.gitignore is missing ${entry}`)
   }
 })
 
-test("preview image is a real PNG", () => {
-  const path = new URL("../preview.png", import.meta.url)
-  assert.ok(statSync(path).size > 1000)
-  const magic = readFileSync(path).subarray(0, 8)
-  assert.deepEqual([...magic], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+test("preview images are real PNGs without text metadata", () => {
+  for (const file of ["preview.png", "docs/scenes-contact-sheet.png", "docs/dittos-contact-sheet.png"]) {
+    const path = new URL(`../${file}`, import.meta.url)
+    assert.ok(statSync(path).size > 1000, `${file} is too small`)
+    const buf = readFileSync(path)
+    const magic = buf.subarray(0, 8)
+    assert.deepEqual([...magic], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], `${file} is not a PNG`)
+    for (const chunk of ["tEXt", "iTXt", "zTXt", "eXIf"]) {
+      assert.ok(!buf.includes(Buffer.from(chunk, "ascii")), `${file} contains a ${chunk} metadata chunk`)
+    }
+  }
 })

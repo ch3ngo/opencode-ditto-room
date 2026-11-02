@@ -1,11 +1,12 @@
 // OpenCode v2 TUI plugin: "Ditto room" in the session sidebar footer
-// (02/11/2026, engine v10 for art v10). One Ditto (the Pokemon, a lavender blob)
+// (02/11/2026, engine v11 for art v10, six scenes). One Ditto (the Pokemon, a lavender blob)
 // per direct child session of the current session that is running right now,
 // plus shiny blue companion Dittos when fewer than two agents are active,
 // walking around a full-bleed pixel-art room, chatting with each other, showing
 // emote bubbles, popping in when a child starts and popping out when it ends.
-// The room art (background, the Ditto sprite sets, emotes, bubble, badge digits)
-// lives in the sibling file `art.ts`; this file animates and composites it.
+// The shared art (Ditto sprite sets, emotes, bubble, badge digits and the Living
+// Room scene) lives in `art.ts`; `scenes.ts` holds the six scene variants. This
+// file chooses one scene at startup and animates and composites it.
 //
 // SPRITE SETS (v6): `DITTO_SETS` is a list of sprite sets ordered from the back
 // of the floor (smallest) to the front (largest), and the engine is generic in
@@ -34,15 +35,15 @@
 // sprite, they follow the sprite's blink-out visibility, and they are not part of
 // any collision box.
 //
-// AMBIENT (v10): `ANIM` is a list of single object pixels that cycle through
-// palette keys, one step every `every` ambient ticks, on a 600 ms clock of their
-// own (OC_DITTO_AMBIENT=0 turns them off). Their y is relative to the floor top,
-// so they stay on the two window glints and the lamp at every room height; ones
-// that fall outside the current view are skipped. They are painted on the
-// background before shadows, sprites and bubbles. The ambient clock runs whenever
-// the room is visible, including with no Dittos; it only recomposes when the
-// 200 ms Ditto ticker is stopped and at least one animated pixel actually
-// changed.
+// AMBIENT (v11): the selected scene's `anim` list holds single object pixels that
+// cycle through that scene's palette keys, one step every `every` ambient ticks,
+// on a 600 ms clock of their own (OC_DITTO_AMBIENT=0 turns all scenes off). Their
+// y is relative to the floor top, so they stay on their object at every room
+// height; ones that fall outside the current view are skipped. Every scene ships
+// at least one changing entry. They are painted on the background before
+// shadows, sprites and bubbles. The ambient clock runs whenever the room is
+// visible, including with no Dittos; it only recomposes when the 200 ms Ditto
+// ticker is stopped and at least one animated pixel actually changed.
 //
 // RESPONSIVE HEIGHT (v10): the room is composed at a compact height derived from
 // process.stdout.rows. The floor is decoupled from the total: it keeps the
@@ -62,7 +63,7 @@
 // stands 3 to 12 ticks, breathing (`idle` / `squash` every 6 ticks), then a
 // weighted picker chooses: wander 35, visit 20, dance 10, jump 10, lookaround 15,
 // emote 5, nap 5 (nap only after 3 actions and never with 3 or more Dittos drawn).
-// visit walks to a random free `POIS` point, stands 12 to 18 ticks and shows that
+// visit walks to a random free point in the selected scene's `pois`, stands 12 to 18 ticks and shows that
 // point's emote (a `zzz` point naps there for 14 ticks); dance is 14 ticks of
 // `wobbleL` / `wobbleR` with a note bubble and 2 ticks of `happy`; jump is two
 // hops with a 2 tick pause; lookaround is blink, idle, blink, then a 4 tick stand
@@ -101,53 +102,46 @@
 // (see README.md, Compatibility). Relative sibling import: verified working in
 // OpenCode 2.2.4 on 01/11/2026.
 //
-// ART CONTRACT (`art.ts`, plain `export const`, no imports in that file). Every
-// dimension and name below is read from the module, none is hard-coded here:
+// ART CONTRACT. Shared art lives in `art.ts` (plain `export const`, no imports):
 //   ART_VERSION                  number, logged once at load
-//   PALETTE                      Record<char, "#rrggbb">. "." is NOT a key and
-//                                means transparent
+//   PALETTE                      Record<char, "#rrggbb"> for the shared sprites
+//                                and the Living Room scene. "." is transparent
 //   ROOM_W                       room width in PIXELS. One pixel is one terminal
 //                                cell wide and half a cell tall
-//   ROOM_H_MIN, ROOM_H_MAX       visible compact height in PIXELS (30 and 40).
-//                                The engine picks an even height in this range
-//                                from the terminal rows; the floor depth is
-//                                preserved separately per terminal tier
-//   WALL_COLOR, BASEBOARD, FLOOR_COLOR, FLOOR_SEAM_COLOR, FLOOR_SEAMS,
-//   FLOOR_SEAM_FROM              the flat background layers: wall colour key, the
-//                                baseboard rows at the bottom of the wall, floor
-//                                colour key and the vertical plank seams
-//   OBJECTS                      floor-anchored room objects, painted in order,
-//                                each { name, x, bottom, from?, rows }. `bottom`
-//                                is the offset of the object's LAST row from the
-//                                floor top (negative above it, positive below
-//                                it), or from the deepest usable floor row when
-//                                `from: "bottom"` (the rug). Rows are bottom
-//                                aligned, "." transparent
-//   DITTO_SETS                   one or more sets ordered back (small) to
-//                                front (large), each { w, h, frames }, frames being the
-//                                nine frame names idle, squash, blink, happy,
-//                                sad, laugh, wobbleL, wobbleR, stretch, h rows
-//                                of w chars, bottom aligned
-//   DITTO_COLORS                 per-kind colour overrides for the same frames:
-//                                { agent, companion }. A missing key falls back
-//                                to PALETTE, which is how companions get the
-//                                shiny blue body without a second sprite set
+//   ROOM_H_MIN, ROOM_H_MAX       visible compact height in PIXELS (30 and 40)
+//   DITTO_SETS                   one or more ordered sets, each { w, h, frames }
+//                                with the nine frame names idle, squash, blink,
+//                                happy, sad, laugh, wobbleL, wobbleR, stretch
+//   DITTO_COLORS                 per-kind colour overrides { agent, companion }
 //   EMOTE_W, EMOTE_H, EMOTE_NAMES, EMOTES
 //                                emote sprite size and names
 //   BUBBLE_W, BUBBLE_H, BUBBLE_TAIL_X, BUBBLE_INNER_X, BUBBLE_INNER_Y, BUBBLE
-//                                speech bubble; the tail points down at column
-//                                BUBBLE_TAIL_X, an emote is drawn with its
-//                                top-left at (BUBBLE_INNER_X, BUBBLE_INNER_Y)
-//   DIGIT_W, DIGIT_H, GLYPHS     badge digits: "0" to "9" and "+", DIGIT_H rows
-//                                of DIGIT_W chars, "." transparent, any other
-//                                char is an on-pixel
-//   BADGE_COLOR                  "#rrggbb" for the overflow badge
-//   POIS                         points of interest { name, cx, at, offset, emote };
-//                                `at` is "back" (floor top + offset) or "front"
-//                                (last usable feet row - offset)
-//   ANIM                         ambient pixels { x, dy, frames, every }; dy is
-//                                relative to the floor top, first frame equals
-//                                the pixel already there
+//                                speech bubble and emote placement
+//   DIGIT_W, DIGIT_H, GLYPHS, BADGE_COLOR
+//                                overflow badge glyphs and colour
+//   WALL_COLOR, BASEBOARD, FLOOR_COLOR, FLOOR_SEAM_COLOR, FLOOR_SEAMS,
+//   FLOOR_SEAM_FROM, OBJECTS, POIS, ANIM
+//                                the Living Room scene, reused by scenes.ts
+//
+// SCENE CONTRACT. `scenes.ts` exports six `Scene` objects and `chooseScene`:
+//   id, name                     stable startup ID and display name
+//   palette, wall, floor, floorSeam
+//                                per-scene colours and palette keys
+//   baseboard                    rows at the bottom of the wall, top row first;
+//                                empty for outdoor scenes
+//   floorSeams, floorSeamFrom    vertical floor seams
+//   objects                      floor-anchored objects { name, x, bottom,
+//                                from?, rows }; rows are bottom aligned, "."
+//                                transparent, and `from: "bottom"` anchors to
+//                                the deepest usable floor row
+//   pois                         visit points { name, cx, at, offset, emote };
+//                                `at` is "back" or "front"
+//   anim                         ambient pixels { x, dy, frames, every }; dy is
+//                                relative to the floor top and the first frame
+//                                equals the pixel already there
+// `chooseScene(raw, random)` pins a valid ID, picks a random scene for unset or
+// "random", and falls back to Living Room for an invalid value.
+//
 // Transparent pixels are ".", skipped when painting.
 //
 // Slot: `prepend: "sidebar.footer"` (falls back to `before: "sidebar.footer"`
@@ -186,6 +180,9 @@
 // still running).
 //
 // Env vars (set before starting the TUI):
+//   OC_DITTO_SCENE      stable scene ID. Unset or "random" picks one scene once
+//                       when the module loads; a valid ID pins it; an invalid
+//                       value falls back to living-room. Read at startup only
 //   OC_DITTO_DEMO       integer 1..12: ignore session data, animate N fake
 //                       AGENT Dittos through the same spawn/queue logic, and add
 //                       the companions the minimum rule requires when companions
@@ -202,21 +199,25 @@
 //   OC_DITTO_MIN_HEIGHT integer, hide the room when stdout rows < it (default
 //                       28, the minimum that fits a 16 row room plus 12 rows of
 //                       sidebar). Ignored if not an integer in 0..1000
+//   OC_DITTO_AMBIENT=0  stop the selected scene's ambient pixels. Any other
+//                       value or unset keeps them on
 // (No fixed room height env var: the height is derived from the terminal, see
 // RESPONSIVE HEIGHT above.)
 //
 // Privacy: no session id, task text or prompt is ever logged or written. The log
 // (/tmp/opencode-ditto-room.log) holds only load/unload, the slot placement, the
-// art version, `agents: <n>, companions: <m>` when that composition changes,
-// `overlap fixed` (max 20 per run, no content) and error messages (max 20 per
-// run). No Ditto position is logged and companion ids never enter the log.
+// art version, the selected scene ID and source, `agents: <n>, companions: <m>`
+// when that composition changes, `overlap fixed` (max 20 per run, no content)
+// and error messages (max 20 per run). No Ditto position is logged and companion
+// ids never enter the log.
 // No network, no state files. Every read is wrapped so a failure renders nothing
 // instead of breaking the sidebar.
 //
-// Deployment: tui.tsx and art.ts are one pair and belong in the same directory.
-// Copy both into <config>/tui-plugins/ditto-room/ and list
+// Deployment: tui.tsx, art.ts and scenes.ts are one set and belong in the same
+// directory. Copy all three into <config>/tui-plugins/ditto-room/ and list
 // "./tui-plugins/ditto-room" in the `plugins` array of cli.json, then restart
-// the TUI. See README.md for install, update and uninstall steps.
+// the TUI. A missing scenes.ts prevents the plugin from loading. See README.md
+// for install, update and uninstall steps.
 //
 // Verified 02/11/2026 with art v10 (OpenCode 2.2.4, tmux, no prompt sent, no
 // model call): compact heights 15 to 20 rows with the v9 floor span preserved
@@ -225,7 +226,11 @@
 // rows (0 unexplained pixels, no prop clipping), population 0 -> 2 blue,
 // 1 -> 1 pink + 1 blue, 2 -> pink only, demo 8 drawing 6 +2 at 34 rows and 8 at
 // 40, and a 40 -> 34 -> 44 -> 36 -> 35 -> 28 -> 40 resize run with 0
-// `overlap fixed`. See README.md (Verification).
+// `overlap fixed`. v1.1.0 also loads all six scene IDs, selects one once at
+// startup, keeps it stable across resize, falls back to living-room for an
+// invalid value, and changes ambient pixels for every scene at 44, 38 and 34
+// rows. With OC_DITTO_AMBIENT=0 every tall scene stayed byte-identical between
+// samples. See README.md (Verification).
 // NOT verified: real spawn/despawn on a live subagent (needs a model call), how
 // the half-cell background colours and the blue companion look in a native
 // terminal outside tmux, the light theme, and the 4 pixel depth threshold over
@@ -239,13 +244,6 @@ import {
   ROOM_W,
   ROOM_H_MIN,
   ROOM_H_MAX,
-  WALL_COLOR,
-  BASEBOARD,
-  FLOOR_COLOR,
-  FLOOR_SEAM_COLOR,
-  FLOOR_SEAMS,
-  FLOOR_SEAM_FROM,
-  OBJECTS,
   DITTO_SETS,
   DITTO_COLORS,
   EMOTES,
@@ -259,9 +257,17 @@ import {
   DIGIT_H,
   GLYPHS,
   BADGE_COLOR,
-  POIS,
-  ANIM,
 } from "./art"
+import { chooseScene } from "./scenes"
+
+// Scene choice is made once when the plugin module loads. OC_DITTO_SCENE pins a
+// stable ID, unset or "random" picks one, and an invalid value falls back to
+// Living Room. The TUI keeps this object for its whole lifetime, so resizes,
+// tabs and child sessions do not change it.
+const CHOSEN = chooseScene(process.env.OC_DITTO_SCENE)
+const currentArt = CHOSEN.scene
+const POIS = currentArt.pois
+const COMPANION_PALETTE = { ...PALETTE, ...DITTO_COLORS.companion }
 
 const LOG = "/tmp/opencode-ditto-room.log"
 const log = (msg: string) => {
@@ -443,17 +449,18 @@ const hopFrame = (h: number): FrameName => (h >= 3 ? "stretch" : h === 2 ? "idle
 
 // ------------------------------------------------------- ambient pixels
 
-// ANIM entries cycle through palette keys, one step every `every` ambient ticks;
-// the first frame equals the pixel the object already drew, so step 0 is the
-// plain room. `dy` is relative to the floor top, so the pixel stays on its object
-// at every room height.
+// The selected scene's ambient entries cycle through its palette keys, one step
+// every `every` ambient ticks; the first frame equals the pixel the object
+// already drew, so step 0 is the plain room. `dy` is relative to the floor top,
+// so the pixel stays on its object at every room height. Every scene ships at
+// least one changing entry; OC_DITTO_AMBIENT=0 disables all of them.
 const ANIM_DEFS: Array<{ x: number; dy: number; frames: string[]; every: number }> =
-  Array.isArray(ANIM) ? ANIM : []
+  Array.isArray(currentArt.anim) ? currentArt.anim : []
 let ambientStep = 0
 const animColour = (a: { frames: string[]; every: number }, step: number) => {
   const n = a.frames.length
   if (!n) return null
-  return PALETTE[a.frames[Math.floor(step / Math.max(1, a.every)) % n]] ?? null
+  return currentArt.palette[a.frames[Math.floor(step / Math.max(1, a.every)) % n]] ?? null
 }
 const paintAnim = (buf: Array<string | null>, step: number) => {
   if (!AMBIENT_ON) return
@@ -585,7 +592,7 @@ const paint = (
     const y = oy + py
     if (y < 0 || y >= scene.h) continue
     for (let px = 0; px < row.length; px++) {
-      const colour = (colours && colours[row[px]]) ?? PALETTE[row[px]]
+      const colour = colours ? colours[row[px]] : PALETTE[row[px]]
       if (!colour) continue
       const x = ox + px
       if (x < 0 || x >= ROOM_W) continue
@@ -594,30 +601,32 @@ const paint = (
   }
 }
 
-// The flat background: wall, baseboard, floor, plank seams and every object,
-// anchored to the floor line. No gradients, no contact shading.
+// The selected scene's flat background: wall, baseboard, floor, plank seams and
+// every object, anchored to the floor line. No gradients, no contact shading.
 const paintRoom = (buf: Array<string | null>) => {
-  const wall = PALETTE[WALL_COLOR] ?? null
-  const floor = PALETTE[FLOOR_COLOR] ?? null
+  const wall = currentArt.palette[currentArt.wall] ?? null
+  const floor = currentArt.palette[currentArt.floor] ?? null
   for (let y = 0; y < scene.h; y++) {
     const c = y < scene.floorTop ? wall : floor
     if (c) buf.fill(c, y * ROOM_W, (y + 1) * ROOM_W)
   }
-  const baseTop = scene.floorTop - BASEBOARD.length
-  for (let i = 0; i < BASEBOARD.length; i++) paint(buf, [BASEBOARD[i]], 0, baseTop + i)
-  const seam = PALETTE[FLOOR_SEAM_COLOR]
+  const baseTop = scene.floorTop - currentArt.baseboard.length
+  for (let i = 0; i < currentArt.baseboard.length; i++) {
+    paint(buf, [currentArt.baseboard[i]], 0, baseTop + i, currentArt.palette)
+  }
+  const seam = currentArt.palette[currentArt.floorSeam]
   if (seam) {
-    for (const x of FLOOR_SEAMS) {
+    for (const x of currentArt.floorSeams) {
       if (x < 0 || x >= ROOM_W) continue
-      for (let y = scene.floorTop + FLOOR_SEAM_FROM; y < scene.h; y++) buf[y * ROOM_W + x] = seam
+      for (let y = scene.floorTop + currentArt.floorSeamFrom; y < scene.h; y++) buf[y * ROOM_W + x] = seam
     }
   }
-  for (const o of OBJECTS) {
+  for (const o of currentArt.objects) {
     if (!o || !Array.isArray(o.rows) || o.rows.length === 0) continue
     const fromBottom = o.from === "bottom"
     const anchor = fromBottom ? scene.floorMax : scene.floorTop
     const last = fromBottom ? anchor - o.bottom : anchor + o.bottom
-    paint(buf, o.rows, o.x, last - (o.rows.length - 1))
+    paint(buf, o.rows, o.x, last - (o.rows.length - 1), currentArt.palette)
   }
 }
 
@@ -693,7 +702,7 @@ const compose = (list: Ditto[], parity: number, badge: string): Frame => {
       s.frames[d.frame] ?? s.frames.idle ?? [],
       d.cx - Math.floor(s.w / 2),
       drawnTopOf(d),
-      d.kind === "companion" ? DITTO_COLORS.companion : undefined,
+      d.kind === "companion" ? COMPANION_PALETTE : PALETTE,
     )
   }
 
@@ -1799,7 +1808,7 @@ export default Plugin.define({
         scene = sceneFor(compact, floor)
         fitScene()
         setFrame(compose(drawnList(), parity, badgeText()))
-        log(`room height: ${compact} rows (${scene.h}px), wall ${scene.floorTop}px, floor ${scene.floorRows}px at ${rows()} terminal rows`)
+        log(`room height: ${compact} rows (${scene.h}px), wall ${scene.floorTop}px, floor ${scene.floorRows}px, scene ${currentArt.id}, at ${rows()} terminal rows`)
       })
 
       // the ambient clock, started and stopped with the room visibility
@@ -1839,6 +1848,8 @@ export default Plugin.define({
     }
     log(`slot placement: ${placement}`)
     log(`art loaded v${ART_VERSION}`)
+    log(`scene: ${currentArt.id} (${CHOSEN.source})`)
+    if (CHOSEN.source === "fallback") log("scene: invalid OC_DITTO_SCENE, using living-room")
     log(`loaded (demo=${DEMO}, always=${ALWAYS ? 1 : 0}, minh=${MIN_HEIGHT})`)
 
     return () => {

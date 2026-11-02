@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 
 import {
   PALETTE,
@@ -16,7 +17,7 @@ import {
   EMOTE_NAMES,
   DITTO_SETS,
 } from "../art.ts"
-import { SCENES } from "../scenes.ts"
+import { SCENES, SCENE_IDS, chooseScene } from "../scenes.ts"
 
 const HEX = /^#[0-9a-f]{6}$/i
 const EXPECTED_IDS = [
@@ -86,7 +87,36 @@ const backgroundKeys = (scene, geo) => {
 test("six scenes with unique ids and names", () => {
   assert.equal(SCENES.length, 6)
   assert.deepEqual(SCENES.map((s) => s.id), EXPECTED_IDS)
+  assert.deepEqual(SCENE_IDS, EXPECTED_IDS)
   assert.equal(new Set(SCENES.map((s) => s.name)).size, 6)
+})
+
+test("every scene has a real changing ambient candidate", () => {
+  for (const scene of SCENES) {
+    assert.ok(scene.anim.length > 0, `${scene.id}: no ambient entries`)
+    assert.ok(
+      scene.anim.some((a) => new Set(a.frames).size > 1),
+      `${scene.id}: every ambient frame set is static`,
+    )
+  }
+})
+
+test("chooseScene pins valid ids, randomizes on unset or random, and falls back safely", () => {
+  for (const id of SCENE_IDS) {
+    const choice = chooseScene(id, () => 0.5)
+    assert.equal(choice.scene.id, id)
+    assert.equal(choice.source, "explicit")
+  }
+  assert.equal(chooseScene("office", () => 0.99).scene.id, "office")
+  assert.equal(chooseScene(" Office ", () => 0.99).source, "explicit")
+  assert.equal(chooseScene("random", () => 0).scene.id, "living-room")
+  assert.equal(chooseScene("random", () => 0.999).scene.id, "football-stadium")
+  assert.equal(chooseScene(undefined, () => 0).scene.id, "living-room")
+  assert.equal(chooseScene(undefined, () => 0.999).scene.id, "football-stadium")
+  assert.equal(chooseScene("not-a-scene", () => 0.5).scene.id, "living-room")
+  assert.equal(chooseScene("not-a-scene", () => 0.5).source, "fallback")
+  assert.equal(chooseScene("japanese-garden", () => 0).source, "explicit")
+  assert.equal(chooseScene("japanese-garden", () => 0).scene.id, "japanese-garden")
 })
 
 test("living room preview entry is the runtime art", () => {
@@ -196,4 +226,16 @@ test("ambient candidates stay inside both geometries and use scene palette keys"
       }
     }
   }
+})
+
+const tuiSource = readFileSync(new URL("../tui.tsx", import.meta.url), "utf8")
+
+test("tui.tsx wires the selected scene into background, POIs and ambient", () => {
+  assert.match(tuiSource, /chooseScene\(process\.env\.OC_DITTO_SCENE\)/)
+  assert.match(tuiSource, /const currentArt = CHOSEN\.scene/)
+  assert.match(tuiSource, /const POIS = currentArt\.pois/)
+  assert.match(tuiSource, /currentArt\.anim/)
+  assert.match(tuiSource, /currentArt\.palette/)
+  assert.match(tuiSource, /if \(!AMBIENT_ON\) return/)
+  assert.match(tuiSource, /!AMBIENT_ON \|\| ANIM_DEFS\.length === 0/)
 })

@@ -1,7 +1,8 @@
-// Scene data for the Ditto room previews. This module is preview-only for now:
-// the runtime still imports the Living Room fields from art.ts, and tui.tsx does
-// not select a scene. The Living Room entry reuses the exact art.ts exports so
-// the current default cannot drift.
+// Scene data for the Ditto room. The runtime selects one scene at startup with
+// OC_DITTO_SCENE and paints it through the compositor in tui.tsx. The Living Room
+// entry reuses the exact art.ts exports, so the current default cannot drift; the
+// other five are new flat scene data. The local preview tools consume the same
+// SCENES array.
 //
 // Scene geometry follows the art contract: ROOM_W is 38 pixels, one pixel is one
 // cell wide and half a cell tall, and objects are bottom aligned and anchored to
@@ -202,6 +203,9 @@ export const SCENES: Scene[] = [
       h: "#5b7a3f", // moss dark
       y: "#d9a441", // lantern warm
       o: "#f2c96b", // lantern light
+      v: "#7fb7c9", // pond water
+      x: "#b7dce6", // pond ripple
+      z: "#4f7f8f", // pond edge
     },
     wall: "c",
     baseboard: [
@@ -275,6 +279,17 @@ export const SCENES: Scene[] = [
         ],
       },
       {
+        name: "pond",
+        x: 19,
+        bottom: 3,
+        rows: [
+          "..zzzzzzzzzz..",
+          ".zvvvvvvvvvvz.",
+          ".zvvxvvvvxvvz.",
+          "..zzzzzzzzzz..",
+        ],
+      },
+      {
         name: "moss-left",
         x: 0,
         bottom: 0,
@@ -308,6 +323,8 @@ export const SCENES: Scene[] = [
       { x: 5, dy: -8, frames: ["b", "e", "b"], every: 6 },
       { x: 15, dy: -5, frames: ["y", "o", "y"], every: 5 },
       { x: 34, dy: -10, frames: ["b", "e", "b"], every: 7 },
+      { x: 22, dy: 1, frames: ["v", "x", "v"], every: 6 },
+      { x: 28, dy: 1, frames: ["v", "x", "v"], every: 8 },
     ],
   },
   {
@@ -636,3 +653,27 @@ export const SCENES: Scene[] = [
     ],
   },
 ]
+
+// Stable scene IDs for OC_DITTO_SCENE. The order is the documented order and
+// Living Room is first, so it is also the safe fallback for an invalid value.
+export const SCENE_IDS = SCENES.map((s) => s.id)
+
+export const findScene = (id: string) => SCENES.find((s) => s.id === id)
+
+export type SceneSource = "explicit" | "random" | "fallback"
+export type SceneChoice = { scene: Scene; source: SceneSource }
+
+// Pick a scene once, at startup. A valid ID pins it; unset or "random" picks
+// one; anything else falls back to Living Room. The caller keeps the returned
+// object for the whole TUI lifetime, so resizes, tabs and child sessions cannot
+// change it.
+export const chooseScene = (raw: string | undefined, random: () => number = Math.random): SceneChoice => {
+  const requested = (raw ?? "").trim().toLowerCase()
+  if (requested && requested !== "random") {
+    const found = findScene(requested)
+    if (found) return { scene: found, source: "explicit" }
+    return { scene: SCENES[0], source: "fallback" }
+  }
+  const index = Math.max(0, Math.min(SCENES.length - 1, Math.floor(random() * SCENES.length)))
+  return { scene: SCENES[index], source: "random" }
+}

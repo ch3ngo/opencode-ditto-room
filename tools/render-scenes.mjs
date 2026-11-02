@@ -1,5 +1,5 @@
-// Local preview renderer for the six scene candidates. This is not part of the
-// runtime plugin: it imports the preview-only scenes.ts and writes PNGs under
+// Local preview renderer for the six integrated scenes. This tool is not part of
+// the runtime plugin: it imports the shared scenes.ts and writes PNGs under
 // previews/. It uses only Node built-ins (zlib for the PNG payload).
 import { mkdirSync, writeFileSync } from "node:fs"
 import { deflateSync } from "node:zlib"

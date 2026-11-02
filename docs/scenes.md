@@ -1,78 +1,59 @@
-# Scene previews, local and unapproved
+# Scenes
 
-Status: preview-only, 02/11/2026. Nothing here is committed or published. The
-runtime still imports the Living Room fields from `art.ts` and has no scene
-selector. The supported `OC_DITTO_COMPANIONS=0` toggle is unchanged.
+Status: integrated in v1.1.0, 02/11/2026. The runtime selects one of six scenes at startup. The Living Room is the default fallback, and the other five are full runtime scenes, not preview-only artwork.
 
-## What is ready now
+## Scene list and stable IDs
 
-- Living Room is the current runtime default and uses the exact existing
-  `art.ts` scene exports. `scenes.ts` references the same palette, objects,
-  points of interest and ambient entries for this scene, so the preview data
-  cannot drift from the plugin.
-- The companion toggle works as documented in the README.
-- The existing plugin runtime, tests and default scene are untouched by the
-  preview tooling.
+| ID | Scene | Direction |
+|---|---|---|
+| `living-room` | Living Room | Cream wall, tan floor, window, bookcase, floor lamp, dog bed and large teal rug. Reuses the existing `art.ts` scene exports. |
+| `mountain-meadow` | Mountain Meadow | Pale sky, two flat mountain silhouettes, fir trees at the corners, open grass, sparse flower ambient pixels. |
+| `japanese-garden` | Japanese Garden | Cream wall with timber trim, bamboo at both sides, small stone lantern, open sand with rake lines, corner moss, a small rear-edge pond with ripple pixels, leaf, lantern and water ambient pixels. |
+| `office` | Office | Desk and monitor at the rear, office chair, filing cabinet and wall clock at the edges, open carpet, screen, LED and clock ambient pixels. |
+| `arcade` | Arcade | Three colourful cabinets at the rear and corners, a lit marquee sign, open floor, screen and sign ambient pixels. |
+| `football-stadium` | Football Stadium | Generic tiered stands with crowd dots, goal and net, corner flags, green pitch with halfway line and centre circle, floodlight and crowd ambient pixels. No team logos. |
 
-## Preview-only candidates
+## Selection
 
-Six scenes are defined in `scenes.ts`:
+- `OC_DITTO_SCENE=<id>` pins a valid scene for the whole TUI lifetime.
+- Unset or `OC_DITTO_SCENE=random` picks one scene once, when the plugin module loads.
+- An invalid value falls back to `living-room` and logs `scene: living-room (fallback)`. The invalid value is not logged.
+- Resizes, tabs and child sessions keep the same scene. The choice is startup-only; restart to change it.
+- There is no live scene-switch UI and no persistence of the random choice.
 
-| Scene | Direction |
-|---|---|
-| Living Room | Existing reference. Cream wall, tan floor, window, bookcase, lamp, dog bed, large teal rug. |
-| Mountain Meadow | Pale sky, two simple mountain silhouettes, fir trees at the corners, open grass, sparse flower ambient pixels. |
-| Japanese Garden | Cream wall with timber trim, bamboo at both sides, a small stone lantern, open sand with rake lines, corner moss, leaf and lantern ambient pixels. |
-| Office | Pale grey wall, desk and monitor at the rear, office chair, filing cabinet and wall clock at the edges, open carpet. |
-| Arcade | Medium indigo wall, three colourful cabinets at the rear and corners, a lit marquee sign, open purple floor, screen and sign ambient pixels. |
-| Football Stadium | Pale sky, generic tiered stands with crowd dots, goal and net, corner flags, green pitch with halfway line and centre circle, floodlight and crowd ambient pixels. No team logos. |
+## Ambient animation
 
-All six follow the existing art rules: flat fills, no gradients, vignette,
-dithering or contact shading; 38 pixels wide; compact and tall geometry; 14 x 11
-Ditto; foot shadows; objects at the rear and corners with the walking floor open.
-Outdoor scenes use an empty baseboard so the wall meets the ground directly.
+Every scene has at least one changing entry in its `anim` list. The shared 600 ms ambient clock paints the selected scene's entries. `OC_DITTO_AMBIENT=0` stops all of them, including the Japanese Garden water ripples. The Dittos still move when ambient is off.
+
+Each ambient entry's first frame equals the pixel already drawn underneath, so step 0 is the plain room. The preview tools show animation step 1 so the candidate pixels are visible.
+
+## Japanese Garden pond
+
+The pond is a flat rear-edge prop at `x=19..32`, in the first four floor rows below the wall. It leaves the central and front walking floor open. The engine has no terrain collision, so a Ditto that walks onto the rear edge can overlap the pond, but it does not block movement and adds no new mechanics. It is decoration, not a walkable water surface.
+
+Two water ripple entries are ambient candidates:
+
+- `x=22`, `dy=1`, frames `v/x/v`, every 6.
+- `x=28`, `dy=1`, frames `v/x/v`, every 8.
+
+They run through the shared ambient clock in the integrated runtime.
 
 ## Architecture
 
-- `art.ts` remains the runtime source of truth for the current default scene and
-  the shared Ditto, emote, bubble and badge art.
-- `scenes.ts` is a preview-only `Scene[]`. The Living Room entry imports the
-  `art.ts` exports; the other five are new flat scene data. It uses a `.ts`
-  extension on that import so the Node preview tests can load it without a
-  bundler. The runtime does not import `scenes.ts` yet.
-- `tools/render-scenes.mjs` is the shared preview generator. It uses the same
-  floor/wall split, object anchoring, foot shadows, depth sort and Ditto sprite
-  data as the plugin, writes PNGs with Node built-ins, and throws if any object
-  or ambient pixel leaves the room. Previews show ambient entries at animation
-  step 1 so the candidate pixels are visible; the runtime still starts from the
-  plain first frame.
-- `tools/make-sheets.py` only lays out the PNGs and draws labels outside the
-  pixel art. Pillow is local preview tooling, not a runtime dependency.
-- `previews/` is ignored by git. It holds generated local review images, not
-  release assets.
+- `art.ts` holds the shared Ditto sprite sets, emote, bubble and badge art, plus the Living Room scene exports. It has no imports.
+- `scenes.ts` holds the six `Scene` definitions, stable IDs and `chooseScene`. The Living Room entry references the `art.ts` exports, so the default cannot drift.
+- `tui.tsx` chooses the scene once, then paints the selected scene's wall, baseboard, floor, seams, objects, points of interest and ambient entries through the same compositor used for the Living Room.
+- `tools/render-scenes.mjs` renders the six scenes to PNGs for local preview. It uses the same scene data and shared Ditto sprites as the runtime.
+- `tools/make-sheets.py` lays out the local contact sheets and updates the two public tall sheets in `docs/`.
 
-## Approval status
+## Public and local previews
 
-Awaiting visual review of these local sheets:
+Tracked public previews:
 
-- `previews/contact-sheet-scenes-tall.png`
-- `previews/contact-sheet-scenes-compact.png`
-- `previews/contact-sheet-dittos-tall.png`
-- `previews/contact-sheet-dittos-compact.png`
+- `docs/scenes-contact-sheet.png`
+- `docs/dittos-contact-sheet.png`
 
-Individual scene and Ditto PNGs are in the same directory. No selector, random
-startup, scene persistence or runtime ambient integration has been added.
-
-## Future, after approval
-
-- Select a scene at startup, with Living Room as the default.
-- Add optional random scene selection per OpenCode session start.
-- Feed the selected `Scene` fields into the existing compositor. The per-scene
-  `anim` candidates are already in the data and would use the existing ambient
-  clock, so `OC_DITTO_AMBIENT=0` would still turn them off.
-- Keep the current companion toggle and the existing default behavior.
-
-None of the future items are implemented in the runtime.
+The full local set is written to the gitignored `previews/` directory, including compact and tall scene images and Ditto scale images. Those are review artifacts, not release assets.
 
 ## Reproduce
 
@@ -82,6 +63,4 @@ node tools/render-scenes.mjs
 python3 tools/make-sheets.py
 ```
 
-The scene tests validate palette keys, object bounds, point-of-interest standing
-spots, ambient bounds and the Living Room equality at both preview geometries:
-compact 15 text rows with a 16 px floor, and tall 20 text rows with a 22 px floor.
+The scene tests validate palette keys, object bounds, point-of-interest spots, ambient bounds, first-frame equality, every scene having a changing ambient entry, and the Living Room equality at compact 15 text rows with a 16 px floor and tall 20 text rows with a 22 px floor.

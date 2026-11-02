@@ -5,11 +5,13 @@ Run tools/render-scenes.mjs first. This script only lays out the PNGs and draws
 text outside the pixel art; it does not render the room itself.
 """
 from pathlib import Path
+import shutil
 
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parent.parent
 PREVIEWS = ROOT / "previews"
+PUBLIC = ROOT / "docs"
 
 SCENES = [
     ("Living Room", "living-room"),
@@ -85,12 +87,13 @@ def make_sheet(name, title, subtitle, prefix, geometry):
     out = PREVIEWS / name
     sheet.save(out, optimize=True)
     print(out)
+    return out
 
 
-make_sheet(
+scene_tall = make_sheet(
     "contact-sheet-scenes-tall.png",
     "Ditto Room scene previews",
-    "Tall geometry: 20 text rows, 22 px floor. Living Room is the current default; the other five are preview-only.",
+    "Tall geometry: 20 text rows, 22 px floor. All six scenes run in the plugin; choose one with OC_DITTO_SCENE.",
     "scene",
     "tall",
 )
@@ -101,7 +104,7 @@ make_sheet(
     "scene",
     "compact",
 )
-make_sheet(
+ditto_tall = make_sheet(
     "contact-sheet-dittos-tall.png",
     "Ditto scale, foot shadows and depth",
     "Pink agent in front of a blue companion. The pair is drawn at different feet rows, so the nearer Ditto occludes the farther one. Tall geometry.",
@@ -111,7 +114,15 @@ make_sheet(
 make_sheet(
     "contact-sheet-dittos-compact.png",
     "Ditto scale, foot shadows and depth, compact",
-    "The same pair at the compact 15-row geometry. Foot shadows sit on the ground row below each Ditto. Preview-only.",
+    "The same pair at the compact 15-row geometry. Foot shadows sit on the ground row below each Ditto.",
     "dittos",
     "compact",
 )
+
+# Tracked public previews. The full set stays local under previews/; these two
+# sanitized tall sheets are the ones the README and docs/scenes.md embed.
+PUBLIC.mkdir(exist_ok=True)
+shutil.copyfile(scene_tall, PUBLIC / "scenes-contact-sheet.png")
+shutil.copyfile(ditto_tall, PUBLIC / "dittos-contact-sheet.png")
+print(PUBLIC / "scenes-contact-sheet.png")
+print(PUBLIC / "dittos-contact-sheet.png")
