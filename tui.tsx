@@ -19,6 +19,7 @@
 // Env vars (read at startup): OC_DITTO_SCENE scene ID or "random",
 // OC_DITTO_DEMO 1..12 fake agents, OC_DITTO_COMPANIONS=0 no blue fillers,
 // OC_DITTO_ALWAYS=0 hide an empty room, OC_DITTO_MIN_HEIGHT rows gate (28),
+// OC_DITTO_MAX_ROWS 15..20 caps the room height (20),
 // OC_DITTO_AMBIENT=0 stop the ambient pixels.
 //
 // Privacy: no session id, task text or prompt is ever logged or written. The log
@@ -41,10 +42,10 @@ import {
   EMOTES,
   BUBBLE_W,
   BUBBLE_H,
-  BUBBLE_TAIL_X,
   BUBBLE_INNER_X,
   BUBBLE_INNER_Y,
-  BUBBLE,
+  BUBBLE_TAIL_X,
+  BUBBLES,
   DIGIT_W,
   DIGIT_H,
   GLYPHS,
@@ -93,13 +94,17 @@ const NSETS = DITTO_SETS.length
 // only the height adapts; 18 terminal rows stay reserved above the room.
 const SIDEBAR_RESERVE_ROWS = 18
 const ROOM_HIDE_BELOW = LEGACY_ROWS_MIN + 12 // 28
+// OC_DITTO_MAX_ROWS caps the room height (15 to 20 rows, default 20 = no cap).
+// The floor is capped to the same tier so the wall keeps its proportion.
+const MAX_ROWS = parseIntIn(process.env.OC_DITTO_MAX_ROWS, 15, COMPACT_ROWS_MIN, COMPACT_ROWS_MAX)
+const MAX_LEGACY_ROWS = MAX_ROWS >= 17 ? MAX_ROWS + 2 : MAX_ROWS + 1
 const legacyRowsFor = (rows: number) =>
-  Math.max(LEGACY_ROWS_MIN, Math.min(LEGACY_ROWS_MAX, rows - SIDEBAR_RESERVE_ROWS))
+  Math.max(LEGACY_ROWS_MIN, Math.min(LEGACY_ROWS_MAX, MAX_LEGACY_ROWS, rows - SIDEBAR_RESERVE_ROWS))
 // Compact rows: legacy 16 -> 15, 17 -> 16, 18 -> 16, 19 -> 17, ..., 22 -> 20.
 const compactRowsFor = (rows: number) => {
   if (rows < ROOM_HIDE_BELOW) return 0
   const legacy = legacyRowsFor(rows)
-  return legacy >= 18 ? legacy - 2 : legacy - 1
+  return Math.min(MAX_ROWS, legacy >= 18 ? legacy - 2 : legacy - 1)
 }
 
 // The floor is decoupled from the total height: `floorRows` is the preserved
@@ -168,6 +173,7 @@ type Ditto = {
   action: ActionName
   actTicks: number
   actStep: number
+  dance: number
   jumpStage: number
   napTicks: number
   napOn: boolean
@@ -223,6 +229,15 @@ const WALK_CYCLE: FrameName[] = ["idle", "wobbleL", "idle", "wobbleR"]
 // hop: up on stretch, at the top idle, landing squash for one tick
 const hopOffset = (h: number) => (h >= 4 ? 1 : h === 3 ? 2 : h === 2 ? 2 : 0)
 const hopFrame = (h: number): FrameName => (h >= 3 ? "stretch" : h === 2 ? "idle" : "squash")
+
+// dance routines: each one cycles through a short list of frames, so solo
+// dancing is not always the same sway. Dancing happens in place and never moves
+// the Ditto, so it needs no collision check.
+const DANCE_STEPS: FrameName[][] = [
+  ["wobbleL", "wobbleR"],
+  ["squash", "stretch"],
+  ["wobbleL", "happy", "wobbleR", "happy"],
+]
 
 // ------------------------------------------------------- ambient pixels
 
@@ -448,6 +463,35 @@ const paintBadge = (buf: Array<string | null>, text: string) => {
   }
 }
 
+// A speech bubble leans up-left or up-right of the head, never straight up. The
+// near side wins when only one side fits, so the box is never clipped by the
+// room. When the box fits fully above the head its one pixel tail stays over the
+// Ditto's centre; otherwise the body sits beside the head (see below).
+const bubbleSide = (cx: number): "left" | "right" => {
+  const fits = (side: "left" | "right") => {
+    const left = cx - BUBBLE_TAIL_X[side]
+    return left >= 0 && left + BUBBLE_W <= ROOM_W
+  }
+  const right = fits("right")
+  const left = fits("left")
+  if (right && left) return cx < ROOM_W / 2 ? "right" : "left"
+  if (right) return "right"
+  if (left) return "left"
+  return cx < ROOM_W / 2 ? "right" : "left"
+}
+
+// The full bubble needs BUBBLE_H pixels of clear wall above the head. The
+// compact back row leaves four and the tall back row eight, so clamping the
+// box down would cover the Ditto's face in both. There the body sits beside the
+// sprite instead: its near edge touches the head box and the tail points at
+// that edge.
+const bubbleBodyX = (cx: number, top: number, half: number, side: "left" | "right"): number => {
+  if (top >= BUBBLE_H) return clamp(cx - BUBBLE_TAIL_X[side], 0, Math.max(0, ROOM_W - BUBBLE_W))
+  const beside = side === "right" ? cx + half : cx - half - BUBBLE_W
+  return clamp(beside, 0, Math.max(0, ROOM_W - BUBBLE_W))
+}
+const bubbleTop = (top: number) => (top >= BUBBLE_H ? top - BUBBLE_H : 0)
+
 // Compose the whole room into text rows of merged runs.
 const compose = (list: Ditto[], parity: number, badge: string): Frame => {
   const buf: Array<string | null> = new Array(scene.h * ROOM_W).fill(null)
@@ -474,12 +518,14 @@ const compose = (list: Ditto[], parity: number, badge: string): Frame => {
     )
   }
 
-  // bubbles go on top of every Ditto, above that Ditto's head
+  // bubbles go on top of every Ditto, diagonally above that Ditto's head
   for (const d of sorted) {
     if (!d.bubble || d.bubble.ticks <= 0) continue
-    const bx = clamp(d.cx - BUBBLE_TAIL_X, 0, Math.max(0, ROOM_W - BUBBLE_W))
-    const by = Math.max(0, drawnTopOf(d) - BUBBLE_H + 1)
-    paint(buf, BUBBLE, bx, by)
+    const top = drawnTopOf(d)
+    const side = bubbleSide(d.cx)
+    const bx = bubbleBodyX(d.cx, top, Math.floor(widthOf(d) / 2), side)
+    const by = bubbleTop(top)
+    paint(buf, BUBBLES[side], bx, by)
     paint(buf, EMOTES[d.bubble.emote] ?? [], bx + BUBBLE_INNER_X, by + BUBBLE_INNER_Y)
   }
 
@@ -533,6 +579,7 @@ const newDitto = (seq: number, kind: DittoKind): Ditto => ({
   action: "idle",
   actTicks: 0,
   actStep: 0,
+  dance: 0,
   jumpStage: 0,
   napTicks: 0,
   napOn: false,
@@ -690,9 +737,10 @@ const startVisit = (dittos: Map<string, Ditto>, id: string, d: Ditto): boolean =
 const startDance = (d: Ditto) => {
   d.mode = "idle"
   d.action = "dance"
-  d.actTicks = 14
+  d.dance = random(DANCE_STEPS.length)
+  d.actTicks = randomIn(10, 18)
   d.actStep = 0
-  d.frame = "wobbleL"
+  d.frame = DANCE_STEPS[d.dance][0] ?? "wobbleL"
   d.bubble = { emote: "note", ticks: 8 }
   d.actions++
 }
@@ -809,7 +857,8 @@ const stepAction = (dittos: Map<string, Ditto>, id: string, d: Ditto) => {
     }
     case "dance": {
       if (d.actStep === 0) {
-        d.frame = d.actTicks % 2 === 0 ? "wobbleL" : "wobbleR"
+        const steps = DANCE_STEPS[d.dance] ?? DANCE_STEPS[0]
+        d.frame = steps[d.actTicks % steps.length] ?? "idle"
         if (--d.actTicks <= 0) {
           d.actStep = 1
           d.actTicks = 2

@@ -39,6 +39,8 @@ CONFIG="$(opencode debug paths | awk '$1 == "config" { print $2 }')"
 cp tui.tsx art.ts scenes.ts "$CONFIG/tui-plugins/ditto-room/"
 ```
 
+The running TUI loads the copy under the config directory, not this checkout, so edits made here do nothing until they are copied and the TUI is restarted. After restarting, `/tmp/opencode-ditto-room.log` must show the art version from `art.ts` (`art loaded v13` for this release); an older number means the copy did not take effect.
+
 ### Uninstall
 Remove `"./tui-plugins/ditto-room"` from the `plugins` array, then:
 
@@ -56,6 +58,7 @@ Set these before starting the TUI; they are read at startup.
 | `OC_DITTO_DEMO` | off | Integer 1 to 12: animate that many fake agents instead of real session data. |
 | `OC_DITTO_COMPANIONS` | on | `0` removes the blue filler companions, so only real active agents appear. |
 | `OC_DITTO_MIN_HEIGHT` | `28` | Hides the room when the terminal has fewer rows than this. |
+| `OC_DITTO_MAX_ROWS` | `15` | Integer 15 to 20: caps the room height in terminal rows. `15` is the smallest room, `20` restores the old size. The width is fixed at 38 cells. |
 | `OC_DITTO_AMBIENT` | on | `0` stops the ambient pixel animation of the selected scene. |
 | `OC_DITTO_ALWAYS` | on | Compatibility flag for empty-room visibility; `0` hides the room when no Ditto would be drawn. |
 

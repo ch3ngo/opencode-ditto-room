@@ -8,7 +8,7 @@
 // deepest usable floor row when `from: "bottom"`. ANIM `dy` and POIS offsets are
 // relative to the floor top: `at: "back"` counts down from it, `at: "front"`
 // counts up from the deepest usable floor row.
-export const ART_VERSION = 10
+export const ART_VERSION = 13
 export const PALETTE: Record<string, string> = {
   // Ditto sprite, emotes and speech bubble
   K: "#593a82",
@@ -371,12 +371,14 @@ export const EMOTES: Record<typeof EMOTE_NAMES[number], string[]> = {
     "NNN..",
     "NN...",
   ],
+  // Three Zs climbing diagonally to the top right, as in the sleeping emoji:
+  // a small z bottom left, a middle z, and the largest one at the top.
   zzz: [
-    "XXXXX",
-    "...X.",
+    "...XX",
+    ".XX.X",
     "..X..",
+    "XX...",
     ".X...",
-    "XXXXX",
   ],
   sparkle: [
     "..Y..",
@@ -386,24 +388,43 @@ export const EMOTES: Record<typeof EMOTE_NAMES[number], string[]> = {
     "..Y..",
   ],
 }
+// Speech bubble: 9 x 10 with the body on rows 0-8 and a one pixel tail on row
+// 9. The body leans up-right (tail at the bottom left) or up-left (tail at the
+// bottom right), so it never sits straight above the Ditto. BUBBLE_TAIL_X is the
+// tail column, which the engine lines up with the Ditto's centre when the bubble
+// fits above the head. The 5 x 5 emotes sit at (2, 2), leaving one white pixel
+// between the glyph and every border.
 export const BUBBLE_W = 9
-export const BUBBLE_H = 11
-export const BUBBLE_TAIL_X = 4
+export const BUBBLE_H = 10
 export const BUBBLE_INNER_X = 2
 export const BUBBLE_INNER_Y = 2
-export const BUBBLE: string[] = [
-  ".DDDDDDD.",
-  "DwwwwwwwD",
-  "DwwwwwwwD",
-  "DwwwwwwwD",
-  "DwwwwwwwD",
-  "DwwwwwwwD",
-  "DwwwwwwwD",
-  "DwwwwwwwD",
-  ".DDDwDDD.",
-  "...DwD...",
-  "....D....",
-]
+export const BUBBLE_TAIL_X: Record<"left" | "right", number> = { left: 8, right: 0 }
+export const BUBBLES: Record<"left" | "right", string[]> = {
+  right: [
+    ".DDDDDDD.",
+    "DwwwwwwwD",
+    "DwwwwwwwD",
+    "DwwwwwwwD",
+    "DwwwwwwwD",
+    "DwwwwwwwD",
+    "DwwwwwwwD",
+    "DwwwwwwwD",
+    "DDDDDDDD.",
+    "D........",
+  ],
+  left: [
+    ".DDDDDDD.",
+    "DwwwwwwwD",
+    "DwwwwwwwD",
+    "DwwwwwwwD",
+    "DwwwwwwwD",
+    "DwwwwwwwD",
+    "DwwwwwwwD",
+    "DwwwwwwwD",
+    ".DDDDDDDD",
+    "........D",
+  ],
+}
 export const DIGIT_W = 3
 export const DIGIT_H = 5
 export const GLYPHS: Record<string, string[]> = {
