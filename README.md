@@ -47,6 +47,7 @@ Remove `"./tui-plugins/ditto-room"` from the `plugins` array, then:
 ```bash
 CONFIG="$(opencode debug paths | awk '$1 == "config" { print $2 }')"
 rm -r "$CONFIG/tui-plugins/ditto-room" /tmp/opencode-ditto-room.log
+rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/opencode-ditto-room"
 ```
 
 ## Configuration
@@ -61,6 +62,23 @@ Set these before starting the TUI; they are read at startup.
 | `OC_DITTO_MAX_ROWS` | `15` | Integer 15 to 20: caps the room height in terminal rows. `15` is the smallest room, `20` restores the old size. The width is fixed at 38 cells. |
 | `OC_DITTO_AMBIENT` | on | `0` stops the ambient pixel animation of the selected scene. |
 | `OC_DITTO_ALWAYS` | on | Compatibility flag for empty-room visibility; `0` hides the room when no Ditto would be drawn. |
+| `OC_DITTO_HIDDEN` | shown | `1` starts with the room hidden, `0` forces it shown. Either value wins over the state file at startup, and the switch then lasts for the session only. |
+
+## Show and hide
+The room starts shown, with a one-line switch one blank line below it. The switch copies the host's own widget: a label, a 5 cell track with a round thumb and the state word, so it reads `Ditto ━━━━● on` when the room is shown and `Ditto ●━━━━ off` when it is hidden. The track is success coloured when on and muted when off, and clicking anywhere on the row toggles it.
+
+The palette command `ditto-room.toggle` does the same from the keyboard. It is listed as `Hide Ditto room` or `Show Ditto room` depending on the current state, and it has no default keybind.
+
+While hidden the room is unmounted, so its 5 fps ticker and its ambient clock stop, and two lines take its place:
+
+```
+plan 2/6 · Ship the show and hide switch
+1 running · 4 done · 0 failed
+```
+
+The first line is the newest todo list of the current session, `no plan` until the experimental todo tool writes one, with its in-progress item cut at 30 characters. The second line counts the child sessions of the current session tree.
+
+The choice survives a restart in `$XDG_STATE_HOME/opencode-ditto-room/state.json`, or `~/.local/state/opencode-ditto-room/state.json` when `XDG_STATE_HOME` is unset. It holds one `{ "v": 1, "hidden": false }` document, file mode 0600 inside a 0700 directory, and nothing else is written. Delete the file to go back to the default, or set `OC_DITTO_HIDDEN` to override it at startup.
 
 ## Scenes
 | ID | Scene |
@@ -79,7 +97,7 @@ Set these before starting the TUI; they are read at startup.
 ## Limitations
 - Tested only with OpenCode 2.2.4. The plugin depends on TUI APIs that may change, and a removed API cannot be papered over.
 - Needs at least 28 terminal rows and roughly 122 columns; narrower terminals can clip the sidebar or the room.
-- The scene is chosen at startup only. There is no live switch and no persistence of the random choice.
+- The scene is chosen at startup only. The show/hide switch does not change it, and the random choice is not persisted.
 - In headless testing, a session with no live assistant activity showed OpenCode's empty-state sidebar graphic over the plugin area, hiding the room.
 - Real subagent spawn and despawn has not been tested against a live model call; the offline suite does not cover it.
 

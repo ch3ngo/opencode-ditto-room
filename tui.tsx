@@ -20,17 +20,30 @@
 // OC_DITTO_DEMO 1..12 fake agents, OC_DITTO_COMPANIONS=0 no blue fillers,
 // OC_DITTO_ALWAYS=0 hide an empty room, OC_DITTO_MIN_HEIGHT rows gate (28),
 // OC_DITTO_MAX_ROWS 15..20 caps the room height (20),
-// OC_DITTO_AMBIENT=0 stop the ambient pixels.
+// OC_DITTO_AMBIENT=0 stop the ambient pixels, OC_DITTO_HIDDEN 1/0 force the
+// room hidden or shown and win over the state file.
+//
+// Toggle: palette command `ditto-room.toggle` ("Hide Ditto room" / "Show Ditto
+// room"), shown by default, no default keybind, plus a one-line clickable switch
+// under the room (label "Ditto", a 5 cell track with a round thumb; on = shown,
+// off = hidden). While hidden the room's place in the same slot holds a two-line
+// work summary: the plan progress plus its in-progress item, and the running /
+// done / failed counts for the current root session tree; the switch stays below
+// it. The room is unmounted while hidden, so its ticker and ambient clock stop.
+// The choice survives restarts in the state file (see STATE_FILE below).
 //
 // Privacy: no session id, task text or prompt is ever logged or written. The log
 // is /tmp/opencode-ditto-room.log (load and unload, slot, art version, scene,
-// population counts, errors). No network, no state files.
+// population counts, toggle state, errors). No network. The only state on disk is
+// that one boolean in the state file (file 0600, directory 0700).
 //
 // tui.tsx, art.ts and scenes.ts are one set and must be deployed together. See
 // README.md for install, update and uninstall steps.
 import { Plugin } from "@opencode/plugin/tui"
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
-import { appendFileSync } from "node:fs"
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { homedir } from "node:os"
+import { dirname, join } from "node:path"
 import {
   ART_VERSION,
   PALETTE,
@@ -133,6 +146,95 @@ const TICK_MS = 200
 const AMBIENT_MS = 600
 // ambient pixels are on unless OC_DITTO_AMBIENT=0
 const AMBIENT_ON = (process.env.OC_DITTO_AMBIENT ?? "").trim() !== "0"
+
+// ------------------------------------------------------------- show/hide toggle
+
+// The room is shown by default. The toggle writes this one boolean to the state
+// file so it survives a restart; OC_DITTO_HIDDEN wins over the file at startup.
+// The state file lives outside the config tree, under the XDG state home:
+// $XDG_STATE_HOME/opencode-ditto-room/state.json, or
+// ~/.local/state/opencode-ditto-room/state.json when XDG_STATE_HOME is unset.
+const STATE_HOME = (process.env.XDG_STATE_HOME ?? "").trim()
+const STATE_FILE = join(
+  STATE_HOME !== "" ? STATE_HOME : join(homedir(), ".local", "state"),
+  "opencode-ditto-room",
+  "state.json",
+)
+
+export type PlanCounts = { total: number; done: number; current: string | null }
+
+// TOGGLE_POLICY_START
+// Plain JS on purpose: the test suite evaluates this block out of the source,
+// the same way it does with the companion policy below.
+const STATE_VERSION = 1
+const SUMMARY_ITEM_MAX = 30
+
+// undefined = no override, true = forced hidden, false = forced shown
+const envHidden = (raw) => {
+  const v = (raw ?? "").trim().toLowerCase()
+  if (v === "1" || v === "true" || v === "yes" || v === "on") return true
+  if (v === "0" || v === "false" || v === "no" || v === "off") return false
+  return undefined
+}
+
+// env wins over the file; an unreadable or unexpected file means shown
+const resolveDittoHidden = (env, file) => (env !== undefined ? env : file === true)
+
+// the file is a plain {v, hidden} document; anything else is ignored
+const readHiddenFile = (path) => {
+  try {
+    const doc = JSON.parse(readFileSync(path, "utf8"))
+    if (doc && typeof doc === "object" && typeof doc.hidden === "boolean") return doc.hidden
+  } catch (_) {}
+  return undefined
+}
+
+// 0700 directory, 0600 file: one boolean, nothing to read from it but the switch
+const writeHiddenFile = (path, hidden) => {
+  try {
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+    writeFileSync(path, `${JSON.stringify({ v: STATE_VERSION, hidden })}\n`, { mode: 0o600 })
+    return true
+  } catch (e) {
+    logError("state write", e)
+    return false
+  }
+}
+
+// one line, collapsed whitespace, ellipsis past the cap
+const compactItem = (text, max) => {
+  const one = String(text ?? "").replace(/\s+/g, " ").trim()
+  return one.length > max ? `${one.slice(0, Math.max(0, max - 1)).trimEnd()}…` : one
+}
+
+// "no plan" until the experimental todo tool writes one
+const summaryPlanLine = (plan) => {
+  if (!plan || plan.total <= 0) return "no plan"
+  const head = `plan ${plan.done}/${plan.total}`
+  const item = plan.current ? compactItem(plan.current, SUMMARY_ITEM_MAX) : ""
+  return item ? `${head} · ${item}` : head
+}
+
+const summaryCountsLine = (running, done, failed) =>
+  `${running} running · ${done} done · ${failed} failed`
+
+// The visible switch under the room copies the host's switch widget: label, a
+// 5 cell track with a round thumb, and the state word. off = room hidden,
+// on = shown.
+const dittoSwitchView = (hiddenNow) => ({
+  label: "Ditto",
+  thumbLeft: hiddenNow,
+  state: hiddenNow ? "off" : "on",
+})
+
+const dittoSwitchLine = (hiddenNow) => {
+  const v = dittoSwitchView(hiddenNow)
+  return `${v.label} ${v.thumbLeft ? "●━━━━" : "━━━━●"} ${v.state}`
+}
+// TOGGLE_POLICY_END
+
+const ENV_HIDDEN = envHidden(process.env.OC_DITTO_HIDDEN)
+
 // feet rows within this many pixels are the same plane, so their full boxes must
 // not touch; pairs further apart may overlap, the nearer one painted last
 const SAME_DEPTH_PX = 4
@@ -1465,6 +1567,197 @@ export default Plugin.define({
       notePopulation()
     }
 
+    // ------------------------------------------------------- show/hide toggle
+    // Shown by default. The choice is one boolean in the state file; an
+    // OC_DITTO_HIDDEN value decides at startup and is then left alone.
+    const fileHidden = readHiddenFile(STATE_FILE)
+    const [hidden, setHidden] = createSignal(resolveDittoHidden(ENV_HIDDEN, fileHidden))
+    const toggleHidden = () => {
+      const next = !hidden()
+      setHidden(next)
+      const saved = ENV_HIDDEN !== undefined ? "env" : writeHiddenFile(STATE_FILE, next) ? "saved" : "not saved"
+      log(`toggle: ${next ? "hidden" : "shown"} (${saved})`)
+      try {
+        context.ui.toast.show({
+          title: "Ditto room",
+          message:
+            ENV_HIDDEN !== undefined
+              ? `${next ? "hidden" : "shown"} for this session; OC_DITTO_HIDDEN decides at startup`
+              : next
+                ? "hidden, the work summary takes its place"
+                : "shown",
+          variant: "success",
+        })
+      } catch (_) {}
+    }
+
+    // root of a session by walking parentID; the tree is every descendant
+    const rootOf = (id: string): string => {
+      let cur = id
+      try {
+        for (let i = 0; i < 8; i++) {
+          const parent = (data.session.get(cur) as any)?.parentID
+          if (typeof parent !== "string" || parent === "" || parent === cur) break
+          cur = parent
+        }
+      } catch (e) { logError("rootOf", e) }
+      return cur
+    }
+
+    // family() gives the host's tree; only direct children of each visited
+    // session are followed, so a family that also returns ancestors is fine.
+    const treeIDs = (id: string): string[] => {
+      if (!id) return []
+      const out: string[] = []
+      const seen = new Set<string>()
+      const queue: string[] = [rootOf(id)]
+      try {
+        while (queue.length && out.length < 64) {
+          const cur = queue.shift() as string
+          if (seen.has(cur)) continue
+          seen.add(cur)
+          out.push(cur)
+          const family = (data.session.family(cur) as string[]) ?? []
+          for (const child of family) {
+            if (typeof child !== "string" || seen.has(child)) continue
+            if ((data.session.get(child) as any)?.parentID !== cur) continue
+            queue.push(child)
+          }
+        }
+      } catch (e) { logError("treeIDs", e) }
+      return out
+    }
+
+    // newest completed todowrite part in the session: the same list the host's
+    // Todo section derives. No plan until the experimental todo tool is on.
+    const planOf = (id: string): PlanCounts | null => {
+      try {
+        const msgs: any[] = (data.session.message.list(id) as any[]) ?? []
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i]
+          if (m?.type !== "assistant") continue
+          const parts: any[] = m.content ?? []
+          for (let j = parts.length - 1; j >= 0; j--) {
+            const p = parts[j]
+            if (p?.type !== "tool" || p.name !== "todowrite" || p.state?.status !== "completed") continue
+            const todos = p.state?.input?.todos
+            if (!Array.isArray(todos)) return null
+            const done = todos.filter((t: any) => t?.status === "completed").length
+            const current = todos.find((t: any) => t?.status === "in_progress")
+            return {
+              total: todos.length,
+              done,
+              current: typeof current?.content === "string" ? current.content : null,
+            }
+          }
+        }
+      } catch (e) { logError("planOf", e) }
+      return null
+    }
+
+    // running / done / failed for one session, excluding the root row
+    const stateOf = (id: string): "running" | "done" | "failed" | "unknown" => {
+      try {
+        if (failedIDs.has(id)) return "failed"
+        const msgs: any[] = (data.session.message.list(id) as any[]) ?? []
+        const last = msgs[msgs.length - 1]
+        if (last?.type === "idle") {
+          const outcome = String(last.data?.outcome ?? "")
+          if (outcome === "failed" || outcome === "interrupted") return "failed"
+          if (outcome === "succeeded") return "done"
+          return outcome === "" ? "done" : "unknown"
+        }
+        if (data.session.status(id) === "running") return "running"
+        if (last?.type === "assistant") {
+          if (last.time?.completed === undefined) return "running"
+          const inflight = (last.content ?? []).some(
+            (p: any) => p?.type === "tool" && (p.state?.status === "running" || p.state?.status === "streaming"),
+          )
+          if (inflight) return "running"
+        }
+        for (const p of (data.session.pending.list(id) as any[]) ?? [])
+          if (p?.type === "user" && data.session.pending.status(id, p.id) === "starting") return "running"
+      } catch (e) { logError("stateOf", e) }
+      return "unknown"
+    }
+
+    // Two lines in the room's place while hidden. The plan is the current
+    // session's newest todowrite list; the counts are the current root session
+    // tree without the root row, straight from context.data.session.
+    function Summary(props: { sessionID: string }) {
+      const plan = createMemo(() => (DEMO > 0 ? null : planOf(props.sessionID)))
+      const tree = createMemo(() => (DEMO > 0 ? [] : treeIDs(props.sessionID)))
+      const counts = createMemo(() => {
+        failedTick()
+        if (DEMO > 0) return { running: DEMO, done: 0, failed: 0 }
+        const out = { running: 0, done: 0, failed: 0 }
+        const ids = tree()
+        for (let i = 1; i < ids.length; i++) {
+          const st = stateOf(ids[i])
+          if (st !== "unknown") out[st]++
+        }
+        return out
+      })
+      // keep the tree's messages fresh while the room is not mounted (the Room
+      // does this for the direct children only)
+      const synced = new Map<string, string>()
+      createEffect(() => {
+        if (DEMO > 0) return
+        for (const id of tree()) {
+          if (id === props.sessionID) continue
+          let st: string | undefined
+          try { st = String(data.session.status(id)) } catch (_) { continue }
+          if (synced.get(id) === st) continue
+          synced.set(id, st)
+          Promise.resolve(data.session.message.sync(id)).catch((e) => logError("summary sync", e))
+        }
+      })
+
+      const muted = () => context.theme.text.muted ?? context.theme.text.base
+      return (
+        <box flexDirection="column" flexShrink={0} height={2} width={ROOM_COLS} minWidth={0}>
+          <text fg={muted()} wrapMode="none" truncate>
+            {summaryPlanLine(plan())}
+          </text>
+          <box>
+            <text fg={muted()} wrapMode="none" truncate>
+              {summaryCountsLine(counts().running, counts().done, counts().failed)}
+            </text>
+          </box>
+        </box>
+      )
+    }
+
+    // One clickable row under the room / summary. Same glyphs, thumb and colours
+    // as the host's remote switch: success track when on, muted track when off,
+    // raised thumb, the whole row is the hit area.
+    function DittoSwitch() {
+      const view = () => dittoSwitchView(hidden())
+      const muted = () => context.theme.text.muted ?? context.theme.text.base
+      const tone = () => (view().thumbLeft ? muted() : context.theme.text.feedback?.success?.base ?? context.theme.text.base)
+      const thumb = () => context.theme.background.raised.base
+      return (
+        <box flexDirection="row" gap={1} alignItems="center" flexShrink={0} minWidth={0} onMouseUp={toggleHidden}>
+          <text fg={muted()} wrapMode="none">
+            {view().label}
+          </text>
+          <text wrapMode="none">
+            <Show when={view().thumbLeft}>
+              <span style={{ fg: thumb(), bg: tone() }}>{"●"}</span>
+              <span style={{ fg: tone(), bg: tone() }}>{"━━━━"}</span>
+            </Show>
+            <Show when={!view().thumbLeft}>
+              <span style={{ fg: tone(), bg: tone() }}>{"━━━━"}</span>
+              <span style={{ fg: thumb(), bg: tone() }}>{"●"}</span>
+            </Show>
+          </text>
+          <text fg={muted()} wrapMode="none">
+            {view().state}
+          </text>
+        </box>
+      )
+    }
+
     function Room(props: { sessionID: string }) {
       // terminal height: the room is dropped before it can crowd the sidebar
       const [rows, setRows] = createSignal(process.stdout.rows || 60)
@@ -1622,8 +1915,38 @@ export default Plugin.define({
       )
     }
 
-    const render = (input: { sessionID?: string }) =>
-      DEMO > 0 ? <Room sessionID={input?.sessionID ?? ""} /> : input?.sessionID ? <Room sessionID={input.sessionID} /> : null
+    // No default keybind, the same choice as the remote switch: the palette is
+    // the only entry point until a bind is wanted.
+    try {
+      context.keymap.layer(() => ({
+        mode: "global" as const,
+        priority: 6,
+        commands: [
+          {
+            id: "ditto-room.toggle",
+            title: hidden() ? "Show Ditto room" : "Hide Ditto room",
+            description:
+              "Show or hide the Ditto room in the session sidebar; while hidden a two-line work summary takes its place",
+            group: "Ditto",
+            palette: true,
+            run: toggleHidden,
+          },
+        ],
+      }))
+    } catch (e) { logError("keymap layer", e) }
+
+    const render = (input: { sessionID?: string }) => {
+      const sid = input?.sessionID ?? ""
+      if (DEMO === 0 && !sid) return null
+      return (
+        <box flexDirection="column" gap={1} flexShrink={0} width={ROOM_COLS} minWidth={0}>
+          <Show when={hidden()} fallback={<Room sessionID={sid} />}>
+            <Summary sessionID={sid} />
+          </Show>
+          <DittoSwitch />
+        </box>
+      )
+    }
 
     let off: (() => void) | undefined
     let placement = "prepend"
@@ -1638,6 +1961,7 @@ export default Plugin.define({
     log(`art loaded v${ART_VERSION}`)
     log(`scene: ${currentArt.id} (${CHOSEN.source})`)
     if (CHOSEN.source === "fallback") log("scene: invalid OC_DITTO_SCENE, using living-room")
+    log(`toggle: ${hidden() ? "hidden" : "shown"} (${ENV_HIDDEN !== undefined ? "OC_DITTO_HIDDEN" : fileHidden !== undefined ? "state file" : "default"})`)
     log(`loaded (demo=${DEMO}, always=${ALWAYS ? 1 : 0}, minh=${MIN_HEIGHT})`)
 
     return () => {

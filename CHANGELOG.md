@@ -2,6 +2,15 @@
 
 All notable changes to this project are recorded here. Dates use DD/MM/YYYY.
 
+## 1.2.0 (18/11/2026)
+
+- Add a show/hide switch one blank line below the room: `Ditto ━━━━● on` when shown, `Ditto ●━━━━ off` when hidden, success track with a round thumb when on and a muted one when off. The whole row is clickable.
+- Add the palette command `ditto-room.toggle`, listed as `Hide Ditto room` or `Show Ditto room`. No default keybind.
+- Persist the choice across restarts in `$XDG_STATE_HOME/opencode-ditto-room/state.json` (`~/.local/state/opencode-ditto-room/state.json` when unset), one boolean, file 0600 inside a 0700 directory.
+- Add `OC_DITTO_HIDDEN=1/0` to force the room hidden or shown at startup; it wins over the state file.
+- While hidden, two lines take the room's place: the current session's plan progress with its in-progress item cut at 30 characters, then the running, done and failed counts of the current session tree. The room is unmounted, so its ticker and ambient clock stop.
+- Add toggle tests for the env parsing, the precedence rule, the state file round-trip and modes, the summary lines and the switch glyphs.
+
 ## 1.1.0 (02/11/2026)
 
 - Add the `OC_DITTO_COMPANIONS=0` toggle. Companions stay on by default, so the minimum-two behaviour is unchanged; disabled, only real active agents appear, with no synthetic ids or phantom children.

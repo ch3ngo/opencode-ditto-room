@@ -29,6 +29,7 @@ test("no private paths or attribution trailers in shipped text files", () => {
     "tests/art.test.mjs",
     "tests/companions.test.mjs",
     "tests/scenes.test.mjs",
+    "tests/toggle.test.mjs",
     "tools/render-scenes.mjs",
     "tools/make-sheets.py",
   ]) {
